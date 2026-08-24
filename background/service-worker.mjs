@@ -2651,10 +2651,26 @@ chrome.webNavigation.onCommitted.addListener(
       }
 
       /*
-       * Any top-frame commit replaces or reloads the armed document. Only
-       * onHistoryStateUpdated from the original document may advance a live
-       * one-shot route.
+       * Chrome can emit another top-frame commit when an existing document
+       * is activated from BFCache or prerender. Preserve the live one-shot
+       * only when Chrome proves that the committing document is still the
+       * exact document that armed it, and apply the same strict route policy
+       * used for History API updates. A missing or different document id is
+       * a real replacement or reload and remains fail-closed.
        */
+      if (
+        typeof session.documentId ===
+          "string" &&
+        details.documentId ===
+          session.documentId
+      ) {
+        await applyConfirmedHistoryNavigation(
+          session,
+          details.url
+        );
+        return;
+      }
+
       await finalizeFailedSession(
         session,
         "navigation"

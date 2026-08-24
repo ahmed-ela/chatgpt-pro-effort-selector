@@ -191,7 +191,8 @@ On SPA navigation, the content script:
 - preserves conservative fail-closed or outcome-uncertain handling when navigation interrupts an active one-shot operation
 - permits only one replay-authorized, same-document blank-chat to exact `/c/WEB:<lowercase UUID>` transition during the active first-send lifecycle
 - uses `webNavigation` document identity to distinguish that History API transition from a reload or full-document navigation even when Chrome splits URL and `loading` updates across separate events
-- ignores a status-only `tabs.onUpdated` loading signal when Chrome still reports the active operation's unchanged ChatGPT pathname; only an explicit route change or top-frame commit can start or complete navigation failure handling
+- ignores a status-only `tabs.onUpdated` loading signal when Chrome still reports the active operation's unchanged ChatGPT pathname
+- evaluates a top-frame `webNavigation.onCommitted` event with the armed operation's same `documentId` through the strict same-document route policy, because BFCache or prerender activation can recommit an existing document; a missing or different `documentId` remains a fail-closed replacement or reload
 - permits one later `WEB:` to canonical promotion only after the same generation continued a request with a submitted user-message id and the content script correlated the exact canonical target to the unique newly active conversation
 - keeps full-document loading, unrelated paths, an uncorrelated canonical target, and a second provisional or canonical transition fail-closed
 
@@ -321,7 +322,7 @@ This is a powerful permission and causes a Chrome warning.
 
 ### `webNavigation`
 
-Distinguishes an exact same-document ChatGPT History API route update from a top-frame reload or committed navigation while a one-shot Extended operation is active. It is scoped by the extension's `https://chatgpt.com/*` host permission.
+Distinguishes an exact same-document ChatGPT History API route update or same-`documentId` activation from a top-frame reload or replacement while a one-shot Extended operation is active. It is scoped by the extension's `https://chatgpt.com/*` host permission.
 
 No remote script is loaded.
 

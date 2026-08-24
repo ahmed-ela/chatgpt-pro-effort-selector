@@ -4,8 +4,11 @@ import test from "node:test";
 const MESSAGE_SOURCE =
   "chatgpt-pro-effort-selector";
 const TAB_ID = 41;
+const SECOND_TAB_ID = 42;
 const TAB_URL =
   "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111";
+const UNRELATED_URL =
+  "https://chatgpt.com/c/22222222-2222-4222-8222-222222222222";
 const DOCUMENT_ID = "document-1";
 
 function createEvent() {
@@ -205,7 +208,7 @@ function sendRuntimeMessage(
   });
 }
 
-test("keeps a same-URL loading update armed until a committed navigation", async () => {
+test("keeps same-document commit noise armed and fails closed on real navigation", async () => {
   const mock = createChromeMock();
   globalThis.chrome = mock.chrome;
 
@@ -286,6 +289,40 @@ test("keeps a same-URL loading update armed until a committed navigation", async
   assert.equal(activeState.phase, "arming");
 
   mock.events.navigationCommitted.emit({
+    documentId: DOCUMENT_ID,
+    frameId: 0,
+    tabId: TAB_ID,
+    url: TAB_URL
+  });
+
+  await delay(25);
+
+  const sameDocumentState =
+    await sendRuntimeMessage(
+      mock.events.runtimeMessage,
+      {
+        source: MESSAGE_SOURCE,
+        type: "getState"
+      },
+      sender
+    );
+
+  assert.equal(
+    mock.calls.debuggerDetach.length,
+    0,
+    "an unchanged commit from the armed document must not detach"
+  );
+  assert.equal(
+    sameDocumentState.activeOperation,
+    true,
+    "an unchanged commit from the armed document must preserve the session"
+  );
+  assert.equal(
+    sameDocumentState.generationId,
+    armResult.generationId
+  );
+
+  mock.events.navigationCommitted.emit({
     documentId: "document-2",
     frameId: 0,
     tabId: TAB_ID,
@@ -336,6 +373,72 @@ test("keeps a same-URL loading update armed until a committed navigation", async
   assert.deepEqual(storedRuntime.active, {});
   assert.equal(
     storedRuntime.audits[String(TAB_ID)]
+      .error,
+    "navigation"
+  );
+
+  const unrelatedSender = {
+    ...sender,
+    tab: {
+      ...sender.tab,
+      id: SECOND_TAB_ID
+    }
+  };
+  const unrelatedArmResult =
+    await sendRuntimeMessage(
+      mock.events.runtimeMessage,
+      {
+        source: MESSAGE_SOURCE,
+        type: "armExtended"
+      },
+      unrelatedSender
+    );
+
+  assert.equal(unrelatedArmResult.ok, true);
+
+  mock.events.navigationCommitted.emit({
+    documentId: DOCUMENT_ID,
+    frameId: 0,
+    tabId: SECOND_TAB_ID,
+    url: UNRELATED_URL
+  });
+
+  await waitFor(() =>
+    mock.calls.sentMessages.some(
+      ({ message, tabId }) =>
+        tabId === SECOND_TAB_ID &&
+        message.type === "status" &&
+        message.phase === "failed"
+    )
+  );
+
+  assert.deepEqual(
+    mock.calls.debuggerDetach,
+    [
+      { tabId: TAB_ID },
+      { tabId: SECOND_TAB_ID }
+    ],
+    "a same-document commit to an unrelated URL must still detach"
+  );
+
+  const unrelatedState =
+    await sendRuntimeMessage(
+      mock.events.runtimeMessage,
+      {
+        source: MESSAGE_SOURCE,
+        type: "getState"
+      },
+      unrelatedSender
+    );
+
+  assert.equal(
+    unrelatedState.activeOperation,
+    false
+  );
+  assert.equal(unrelatedState.phase, "failed");
+  assert.equal(
+    mock.storedValues.proEffortRuntimeV1
+      .audits[String(SECOND_TAB_ID)]
       .error,
     "navigation"
   );

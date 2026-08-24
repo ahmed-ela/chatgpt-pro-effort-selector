@@ -192,16 +192,18 @@ Run this five-send sequence in one canonical chat, using a unique marker for eve
 
 1. In the listener regression harness, arm Extended on a saved chat and emit a status-only `tabs.onUpdated` loading signal while `tabs.get()` still returns the same URL.
 2. Advance past the one-second navigation-confirmation deadline and confirm the generation remains armed, no navigation audit is created, and the debugger is not detached.
-3. Emit a top-frame `webNavigation.onCommitted` event and confirm that actual document replacement cancels the operation and detaches once.
-4. Start another Extended operation.
-5. Navigate to another ChatGPT route immediately.
-6. Confirm the one-shot operation is cancelled or marked uncertain.
-7. Start another operation and close the tab.
-8. Confirm no other ChatGPT tab is affected.
-9. During an A-to-B SPA transition, attempt a normal composer submission before B's storage read completes.
-10. Confirm the original event is stopped and is replayed only after B's mode is loaded, or remains blocked if loading fails or the route changes again.
-11. Confirm a terminal status from A's retired generation cannot overwrite B's UI.
-12. Confirm the destination route does not restore an unrelated completed tab audit as its own Sent or warning state.
+3. Emit a top-frame `webNavigation.onCommitted` event with the armed document's same `documentId` and URL, and confirm the generation remains armed without a detach.
+4. Emit the same event with a different `documentId` and confirm that actual document replacement cancels the operation and detaches once.
+5. Confirm that a same-`documentId` commit to an unrelated ChatGPT route is still rejected by the strict same-document route policy.
+6. Start another Extended operation.
+7. Navigate to another ChatGPT route immediately.
+8. Confirm the one-shot operation is cancelled or marked uncertain.
+9. Start another operation and close the tab.
+10. Confirm no other ChatGPT tab is affected.
+11. During an A-to-B SPA transition, attempt a normal composer submission before B's storage read completes.
+12. Confirm the original event is stopped and is replayed only after B's mode is loaded, or remains blocked if loading fails or the route changes again.
+13. Confirm a terminal status from A's retired generation cannot overwrite B's UI.
+14. Confirm the destination route does not restore an unrelated completed tab audit as its own Sent or warning state.
 
 ## Multiple tabs
 
