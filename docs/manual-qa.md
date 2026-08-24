@@ -190,15 +190,18 @@ Run this five-send sequence in one canonical chat, using a unique marker for eve
 
 ## Navigation and tab closure
 
-1. Start an Extended operation.
-2. Navigate to another ChatGPT route immediately.
-3. Confirm the one-shot operation is cancelled or marked uncertain.
-4. Start another operation and close the tab.
-5. Confirm no other ChatGPT tab is affected.
-6. During an A-to-B SPA transition, attempt a normal composer submission before B's storage read completes.
-7. Confirm the original event is stopped and is replayed only after B's mode is loaded, or remains blocked if loading fails or the route changes again.
-8. Confirm a terminal status from A's retired generation cannot overwrite B's UI.
-9. Confirm the destination route does not restore an unrelated completed tab audit as its own Sent or warning state.
+1. In the listener regression harness, arm Extended on a saved chat and emit a status-only `tabs.onUpdated` loading signal while `tabs.get()` still returns the same URL.
+2. Advance past the one-second navigation-confirmation deadline and confirm the generation remains armed, no navigation audit is created, and the debugger is not detached.
+3. Emit a top-frame `webNavigation.onCommitted` event and confirm that actual document replacement cancels the operation and detaches once.
+4. Start another Extended operation.
+5. Navigate to another ChatGPT route immediately.
+6. Confirm the one-shot operation is cancelled or marked uncertain.
+7. Start another operation and close the tab.
+8. Confirm no other ChatGPT tab is affected.
+9. During an A-to-B SPA transition, attempt a normal composer submission before B's storage read completes.
+10. Confirm the original event is stopped and is replayed only after B's mode is loaded, or remains blocked if loading fails or the route changes again.
+11. Confirm a terminal status from A's retired generation cannot overwrite B's UI.
+12. Confirm the destination route does not restore an unrelated completed tab audit as its own Sent or warning state.
 
 ## Multiple tabs
 

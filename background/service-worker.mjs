@@ -827,10 +827,37 @@ function clearPendingNavigation(session) {
   session.pendingNavigationUrl = null;
 }
 
+function assertPendingNavigationTarget(
+  session,
+  nextUrl
+) {
+  const parsedUrl =
+    parseAllowedChatgptUrl(nextUrl);
+  const targetChanged =
+    parsedUrl !== null &&
+    parsedUrl.pathname !== session.pagePath;
+
+  console.assert(
+    targetChanged,
+    "Pending navigation must target a different allowed ChatGPT pathname."
+  );
+
+  return targetChanged;
+}
+
 function schedulePendingNavigation(
   session,
   nextUrl
 ) {
+  if (
+    !assertPendingNavigationTarget(
+      session,
+      nextUrl
+    )
+  ) {
+    return false;
+  }
+
   clearPendingNavigation(session);
   session.pendingNavigationUrl = nextUrl;
   session.navigationTimer = setTimeout(() => {
@@ -847,6 +874,8 @@ function schedulePendingNavigation(
       );
     }
   }, NAVIGATION_CONFIRM_TIMEOUT_MS);
+
+  return true;
 }
 
 function isCanonicalAuthorizationPending(
@@ -2473,10 +2502,12 @@ async function handleTabNavigationUpdate(
     return;
   }
 
-  if (
-    decision.action === "keep" &&
-    changeInfo.status !== "loading"
-  ) {
+  /*
+   * A status-only `loading` update is not proof of navigation. ChatGPT can
+   * emit one while the committed top-frame URL is unchanged. A real reload
+   * still reaches webNavigation.onCommitted and fails closed below.
+   */
+  if (decision.action === "keep") {
     return;
   }
 

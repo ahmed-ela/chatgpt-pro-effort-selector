@@ -191,6 +191,7 @@ On SPA navigation, the content script:
 - preserves conservative fail-closed or outcome-uncertain handling when navigation interrupts an active one-shot operation
 - permits only one replay-authorized, same-document blank-chat to exact `/c/WEB:<lowercase UUID>` transition during the active first-send lifecycle
 - uses `webNavigation` document identity to distinguish that History API transition from a reload or full-document navigation even when Chrome splits URL and `loading` updates across separate events
+- ignores a status-only `tabs.onUpdated` loading signal when Chrome still reports the active operation's unchanged ChatGPT pathname; only an explicit route change or top-frame commit can start or complete navigation failure handling
 - permits one later `WEB:` to canonical promotion only after the same generation continued a request with a submitted user-message id and the content script correlated the exact canonical target to the unique newly active conversation
 - keeps full-document loading, unrelated paths, an uncorrelated canonical target, and a second provisional or canonical transition fail-closed
 

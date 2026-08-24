@@ -1,0 +1,342 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+const MESSAGE_SOURCE =
+  "chatgpt-pro-effort-selector";
+const TAB_ID = 41;
+const TAB_URL =
+  "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111";
+const DOCUMENT_ID = "document-1";
+
+function createEvent() {
+  const listeners = [];
+
+  return {
+    addListener(listener) {
+      listeners.push(listener);
+    },
+    emit(...arguments_) {
+      for (const listener of listeners) {
+        listener(...arguments_);
+      }
+    },
+    listeners
+  };
+}
+
+function createChromeMock() {
+  const events = {
+    debuggerDetach: createEvent(),
+    debuggerEvent: createEvent(),
+    historyStateUpdated: createEvent(),
+    navigationCommitted: createEvent(),
+    runtimeMessage: createEvent(),
+    tabRemoved: createEvent(),
+    tabUpdated: createEvent()
+  };
+  const calls = {
+    debuggerAttach: [],
+    debuggerCommands: [],
+    debuggerDetach: [],
+    sentMessages: [],
+    storageWrites: [],
+    tabsGet: []
+  };
+  const storedValues = {};
+
+  const chrome = {
+    debugger: {
+      attach(target, protocolVersion, callback) {
+        calls.debuggerAttach.push({
+          target,
+          protocolVersion
+        });
+        callback();
+      },
+      detach(target, callback) {
+        calls.debuggerDetach.push(target);
+        callback();
+      },
+      onDetach: events.debuggerDetach,
+      onEvent: events.debuggerEvent,
+      sendCommand(
+        target,
+        method,
+        parameters,
+        callback
+      ) {
+        calls.debuggerCommands.push({
+          target,
+          method,
+          parameters
+        });
+        callback({});
+      }
+    },
+    runtime: {
+      lastError: null,
+      onMessage: events.runtimeMessage
+    },
+    storage: {
+      session: {
+        get(keys, callback) {
+          const result = {};
+
+          for (const key of keys) {
+            if (
+              Object.hasOwn(storedValues, key)
+            ) {
+              result[key] =
+                structuredClone(
+                  storedValues[key]
+                );
+            }
+          }
+
+          callback(result);
+        },
+        set(values, callback) {
+          for (const [key, value] of
+            Object.entries(values)) {
+            storedValues[key] =
+              structuredClone(value);
+          }
+
+          calls.storageWrites.push(
+            structuredClone(values)
+          );
+          callback();
+        }
+      }
+    },
+    tabs: {
+      get(tabId, callback) {
+        calls.tabsGet.push(tabId);
+        callback({
+          id: tabId,
+          url: TAB_URL
+        });
+      },
+      onRemoved: events.tabRemoved,
+      onUpdated: events.tabUpdated,
+      sendMessage(
+        tabId,
+        message,
+        optionsOrCallback,
+        callback
+      ) {
+        const options =
+          typeof optionsOrCallback ===
+          "function"
+            ? null
+            : optionsOrCallback;
+        const completion =
+          typeof optionsOrCallback ===
+          "function"
+            ? optionsOrCallback
+            : callback;
+
+        calls.sentMessages.push({
+          tabId,
+          message:
+            structuredClone(message),
+          options:
+            options === null
+              ? null
+              : structuredClone(options)
+        });
+        completion();
+      }
+    },
+    webNavigation: {
+      onCommitted:
+        events.navigationCommitted,
+      onHistoryStateUpdated:
+        events.historyStateUpdated
+    }
+  };
+
+  return {
+    calls,
+    chrome,
+    events,
+    storedValues
+  };
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function waitFor(predicate) {
+  const deadline = Date.now() + 1_000;
+
+  while (!predicate()) {
+    assert.ok(
+      Date.now() < deadline,
+      "timed out waiting for service-worker listener"
+    );
+    await delay(10);
+  }
+}
+
+function sendRuntimeMessage(
+  runtimeMessageEvent,
+  message,
+  sender
+) {
+  assert.equal(
+    runtimeMessageEvent.listeners.length,
+    1,
+    "service worker must register one runtime message listener"
+  );
+
+  return new Promise((resolve) => {
+    const keepChannelOpen =
+      runtimeMessageEvent.listeners[0](
+        message,
+        sender,
+        resolve
+      );
+
+    assert.equal(keepChannelOpen, true);
+  });
+}
+
+test("keeps a same-URL loading update armed until a committed navigation", async () => {
+  const mock = createChromeMock();
+  globalThis.chrome = mock.chrome;
+
+  await import(
+    "../background/service-worker.mjs"
+  );
+
+  const sender = {
+    documentId: DOCUMENT_ID,
+    frameId: 0,
+    tab: {
+      id: TAB_ID,
+      url: TAB_URL
+    },
+    url: TAB_URL
+  };
+  const armResult = await sendRuntimeMessage(
+    mock.events.runtimeMessage,
+    {
+      source: MESSAGE_SOURCE,
+      type: "armExtended"
+    },
+    sender
+  );
+
+  assert.equal(armResult.ok, true);
+  assert.equal(
+    typeof armResult.generationId,
+    "string"
+  );
+  assert.deepEqual(
+    mock.calls.debuggerAttach,
+    [
+      {
+        target: { tabId: TAB_ID },
+        protocolVersion: "1.3"
+      }
+    ]
+  );
+
+  mock.events.tabUpdated.emit(
+    TAB_ID,
+    { status: "loading" }
+  );
+
+  await delay(1_150);
+
+  assert.deepEqual(
+    mock.calls.tabsGet,
+    [TAB_ID, TAB_ID],
+    "the status-only update must resolve the current URL through tabs.get"
+  );
+  assert.equal(
+    mock.calls.debuggerDetach.length,
+    0,
+    "an unchanged URL must not trigger the one-second navigation failure"
+  );
+
+  const activeState = await sendRuntimeMessage(
+    mock.events.runtimeMessage,
+    {
+      source: MESSAGE_SOURCE,
+      type: "getState"
+    },
+    sender
+  );
+
+  assert.equal(activeState.ok, true);
+  assert.equal(
+    activeState.activeOperation,
+    true,
+    "the armed session must not be retired"
+  );
+  assert.equal(
+    activeState.generationId,
+    armResult.generationId
+  );
+  assert.equal(activeState.phase, "arming");
+
+  mock.events.navigationCommitted.emit({
+    documentId: "document-2",
+    frameId: 0,
+    tabId: TAB_ID,
+    url: TAB_URL
+  });
+
+  await waitFor(() =>
+    mock.calls.sentMessages.some(
+      ({ message }) =>
+        message.type === "status" &&
+        message.phase === "failed"
+    )
+  );
+
+  assert.deepEqual(
+    mock.calls.debuggerDetach,
+    [{ tabId: TAB_ID }],
+    "a top-frame commit must detach the debugger"
+  );
+
+  const failedState = await sendRuntimeMessage(
+    mock.events.runtimeMessage,
+    {
+      source: MESSAGE_SOURCE,
+      type: "getState"
+    },
+    sender
+  );
+
+  assert.equal(failedState.ok, true);
+  assert.equal(
+    failedState.activeOperation,
+    false,
+    "a committed navigation must retire the armed session"
+  );
+  assert.equal(failedState.phase, "failed");
+  assert.equal(
+    failedState.label,
+    "Extended blocked"
+  );
+  assert.match(
+    failedState.message,
+    /tab navigated while Extended was armed/
+  );
+
+  const storedRuntime =
+    mock.storedValues.proEffortRuntimeV1;
+  assert.deepEqual(storedRuntime.active, {});
+  assert.equal(
+    storedRuntime.audits[String(TAB_ID)]
+      .error,
+    "navigation"
+  );
+});
