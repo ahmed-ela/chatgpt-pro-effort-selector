@@ -128,13 +128,15 @@ Run this five-send sequence in one canonical chat, using a unique marker for eve
 2. Reload, confirm Standard, send a unique marker, wait for the canonical route, confirm backend Standard, reload, and confirm the saved chat remains Standard.
 3. Open a later blank new chat and confirm it defaults to Standard.
 4. Select Extended but do not send, reload, and confirm the same blank draft remains Extended.
-5. Send a unique marker, wait for success and the canonical route, confirm durable backend Extended proof, reload, and confirm the saved chat remains Extended.
-6. Open a later blank new chat and confirm it defaults to Standard.
-7. Select Extended in a blank draft without sending, navigate directly to an existing saved Standard conversation, and confirm the existing conversation remains Standard.
-8. Open another blank new chat in that same tab and confirm it starts Standard rather than resurrecting the abandoned draft selection.
-9. Open a separate fresh ChatGPT tab and confirm its blank draft starts Standard.
-10. In a controlled harness, or manually when the timing is reproducible, submit a Standard first message and select Extended before ChatGPT assigns the canonical route.
-11. Confirm that first marked request remained backend Standard, reload and confirm the created chat is Extended, then send a second marker and confirm backend Extended.
+5. Send a unique marker, wait for success and the canonical route, and confirm durable backend Extended proof.
+6. Without reloading the promoted saved chat, send a second unique marker and confirm it also has durable backend Extended proof with no navigation-cancellation toast.
+7. Reload and confirm the saved chat remains Extended.
+8. Open a later blank new chat and confirm it defaults to Standard.
+9. Select Extended in a blank draft without sending, navigate directly to an existing saved Standard conversation, and confirm the existing conversation remains Standard.
+10. Open another blank new chat in that same tab and confirm it starts Standard rather than resurrecting the abandoned draft selection.
+11. Open a separate fresh ChatGPT tab and confirm its blank draft starts Standard.
+12. In a controlled harness, or manually when the timing is reproducible, submit a Standard first message and select Extended before ChatGPT assigns the canonical route.
+13. Confirm that first marked request remained backend Standard, reload and confirm the created chat is Extended, then send a second marker and confirm backend Extended.
 
 ## Legacy migration QA
 

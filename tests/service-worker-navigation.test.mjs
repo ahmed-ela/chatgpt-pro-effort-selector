@@ -47,6 +47,7 @@ function createChromeMock() {
     tabsGet: []
   };
   const storedValues = {};
+  const tabUrls = new Map();
 
   const chrome = {
     debugger: {
@@ -118,7 +119,8 @@ function createChromeMock() {
         calls.tabsGet.push(tabId);
         callback({
           id: tabId,
-          url: TAB_URL
+          url:
+            tabUrls.get(tabId) ?? TAB_URL
         });
       },
       onRemoved: events.tabRemoved,
@@ -164,7 +166,8 @@ function createChromeMock() {
     calls,
     chrome,
     events,
-    storedValues
+    storedValues,
+    tabUrls
   };
 }
 
@@ -641,5 +644,376 @@ test("sends the exact Pro Extended body through Fetch.continueRequest", async ()
       model: "gpt-5-6-pro",
       thinking_effort: "extended"
     }
+  );
+});
+
+test("uses the current tab URL when MessageSender.url is stale", async () => {
+  const staleUrlMock = createChromeMock();
+  globalThis.chrome = staleUrlMock.chrome;
+
+  await import(
+    "../background/service-worker.mjs?stale-message-sender-url"
+  );
+
+  const staleUrlTabId = 51;
+  const staleUrlSender = {
+    documentId: "stale-url-document",
+    frameId: 0,
+    tab: {
+      id: staleUrlTabId,
+      url: TAB_URL
+    },
+    url: "https://chatgpt.com/"
+  };
+
+  staleUrlMock.tabUrls.set(
+    staleUrlTabId,
+    TAB_URL
+  );
+
+  const armResult = await sendRuntimeMessage(
+    staleUrlMock.events.runtimeMessage,
+    {
+      source: MESSAGE_SOURCE,
+      type: "armExtended"
+    },
+    staleUrlSender
+  );
+
+  assert.equal(armResult.ok, true);
+  assert.equal(
+    staleUrlMock.storedValues
+      .proEffortRuntimeV1
+      .active[String(staleUrlTabId)]
+      .pagePath,
+    new URL(TAB_URL).pathname,
+    "the generation must bind to the current canonical tab path"
+  );
+  assert.equal(
+    staleUrlMock.storedValues
+      .proEffortRuntimeV1
+      .active[String(staleUrlTabId)]
+      .documentId,
+    staleUrlSender.documentId
+  );
+  assert.deepEqual(
+    staleUrlMock.calls.debuggerAttach.filter(
+      ({ target }) =>
+        target.tabId === staleUrlTabId
+    ),
+    [
+      {
+        protocolVersion: "1.3",
+        target: { tabId: staleUrlTabId }
+      }
+    ],
+    "the stale sender URL must not prevent attachment to the current canonical tab"
+  );
+
+  const confirmResult =
+    await sendRuntimeMessage(
+      staleUrlMock.events.runtimeMessage,
+      {
+        generationId:
+          armResult.generationId,
+        source: MESSAGE_SOURCE,
+        type: "confirmArmed"
+      },
+      staleUrlSender
+    );
+  const replayResult =
+    await sendRuntimeMessage(
+      staleUrlMock.events.runtimeMessage,
+      {
+        generationId:
+          armResult.generationId,
+        source: MESSAGE_SOURCE,
+        type: "markReplayStarting"
+      },
+      staleUrlSender
+    );
+
+  assert.deepEqual(confirmResult, {
+    generationId: armResult.generationId,
+    ok: true
+  });
+  assert.deepEqual(replayResult, {
+    generationId: armResult.generationId,
+    ok: true
+  });
+
+  staleUrlMock.events.debuggerEvent.emit(
+    { tabId: staleUrlTabId },
+    "Fetch.requestPaused",
+    {
+      requestId: "stale-url-pro-request",
+      request: {
+        headers: {
+          "content-type":
+            "application/json"
+        },
+        method: "POST",
+        postData: JSON.stringify({
+          client_prepare_state: "ready",
+          messages: [
+            {
+              author: { role: "user" },
+              id: "stale-url-user-message"
+            }
+          ],
+          model: "gpt-5-6-pro",
+          thinking_effort: "standard"
+        }),
+        url:
+          "https://chatgpt.com/backend-api/f/conversation"
+      },
+      resourceType: "Fetch"
+    }
+  );
+
+  await waitFor(() =>
+    staleUrlMock.calls.debuggerCommands.some(
+      ({ method, parameters, target }) =>
+        target.tabId === staleUrlTabId &&
+        method === "Fetch.continueRequest" &&
+        parameters.requestId ===
+          "stale-url-pro-request"
+    )
+  );
+
+  const continuations =
+    staleUrlMock.calls.debuggerCommands.filter(
+      ({ method, parameters, target }) =>
+        target.tabId === staleUrlTabId &&
+        method === "Fetch.continueRequest" &&
+        parameters.requestId ===
+          "stale-url-pro-request"
+    );
+  assert.equal(
+    continuations.length,
+    1,
+    "the stale context must still continue exactly one qualifying request"
+  );
+  const [continuation] = continuations;
+  const continuedBody = JSON.parse(
+    Buffer.from(
+      continuation.parameters.postData,
+      "base64"
+    ).toString("utf8")
+  );
+
+  assert.equal(
+    continuedBody.model,
+    "gpt-5-6-pro"
+  );
+  assert.equal(
+    continuedBody.thinking_effort,
+    "extended"
+  );
+  assert.equal(
+    continuedBody.client_prepare_state,
+    "none"
+  );
+
+  await waitFor(() =>
+    staleUrlMock.calls.sentMessages.some(
+      ({ message, tabId }) =>
+        tabId === staleUrlTabId &&
+        message.generationId ===
+          armResult.generationId &&
+        message.phase === "sent"
+    )
+  );
+
+  assert.deepEqual(
+    staleUrlMock.calls.debuggerDetach.filter(
+      ({ tabId }) =>
+        tabId === staleUrlTabId
+    ),
+    [{ tabId: staleUrlTabId }]
+  );
+
+  const sentState = await sendRuntimeMessage(
+    staleUrlMock.events.runtimeMessage,
+    {
+      source: MESSAGE_SOURCE,
+      type: "getState"
+    },
+    staleUrlSender
+  );
+
+  assert.equal(sentState.activeOperation, false);
+  assert.equal(sentState.phase, "sent");
+  assert.equal(
+    sentState.generationId,
+    armResult.generationId
+  );
+  assert.equal(
+    staleUrlMock.storedValues
+      .proEffortRuntimeV1
+      .audits[String(staleUrlTabId)]
+      .status,
+    "sent"
+  );
+  assert.equal(
+    staleUrlMock.storedValues
+      .proEffortRuntimeV1
+      .audits[String(staleUrlTabId)]
+      .error,
+    null
+  );
+
+  const differentPathTabId = 52;
+  const differentPathSender = {
+    ...staleUrlSender,
+    documentId: "different-path-document",
+    tab: {
+      id: differentPathTabId,
+      url: TAB_URL
+    }
+  };
+
+  staleUrlMock.tabUrls.set(
+    differentPathTabId,
+    UNRELATED_URL
+  );
+
+  const differentPathResult =
+    await sendRuntimeMessage(
+      staleUrlMock.events.runtimeMessage,
+      {
+        source: MESSAGE_SOURCE,
+        type: "armExtended"
+      },
+      differentPathSender
+    );
+
+  assert.equal(differentPathResult.ok, false);
+  assert.equal(
+    differentPathResult.code,
+    "navigation"
+  );
+  assert.equal(
+    staleUrlMock.calls.debuggerAttach.some(
+      ({ target }) =>
+        target.tabId === differentPathTabId
+    ),
+    false,
+    "a live tab on a different path must fail before debugger attachment"
+  );
+
+  for (const [tabId, contextUrl] of [
+    [54, "https://example.com/"],
+    [55, undefined]
+  ]) {
+    const invalidContextSender = {
+      ...staleUrlSender,
+      documentId:
+        `invalid-context-document-${tabId}`,
+      tab: {
+        id: tabId,
+        url: TAB_URL
+      },
+      url: contextUrl
+    };
+
+    staleUrlMock.tabUrls.set(tabId, TAB_URL);
+
+    const invalidContextResult =
+      await sendRuntimeMessage(
+        staleUrlMock.events.runtimeMessage,
+        {
+          source: MESSAGE_SOURCE,
+          type: "armExtended"
+        },
+        invalidContextSender
+      );
+
+    assert.equal(
+      invalidContextResult.ok,
+      false
+    );
+    assert.equal(
+      invalidContextResult.code,
+      "invalid_sender"
+    );
+    assert.equal(
+      staleUrlMock.calls.debuggerAttach.some(
+        ({ target }) => target.tabId === tabId
+      ),
+      false,
+      "an allowed tab URL must not authenticate a foreign or missing sender context"
+    );
+  }
+
+  const differentDocumentTabId = 53;
+  const originalDocumentSender = {
+    ...staleUrlSender,
+    documentId: "original-document",
+    tab: {
+      id: differentDocumentTabId,
+      url: TAB_URL
+    }
+  };
+
+  staleUrlMock.tabUrls.set(
+    differentDocumentTabId,
+    TAB_URL
+  );
+
+  const documentArmResult =
+    await sendRuntimeMessage(
+      staleUrlMock.events.runtimeMessage,
+      {
+        source: MESSAGE_SOURCE,
+        type: "armExtended"
+      },
+      originalDocumentSender
+    );
+
+  assert.equal(documentArmResult.ok, true);
+
+  const wrongDocumentConfirmation =
+    await sendRuntimeMessage(
+      staleUrlMock.events.runtimeMessage,
+      {
+        generationId:
+          documentArmResult.generationId,
+        source: MESSAGE_SOURCE,
+        type: "confirmArmed"
+      },
+      {
+        ...originalDocumentSender,
+        documentId: "replacement-document"
+      }
+    );
+
+  assert.equal(
+    wrongDocumentConfirmation.ok,
+    false
+  );
+  assert.equal(
+    wrongDocumentConfirmation.code,
+    "arm_not_current"
+  );
+
+  const cancelResult = await sendRuntimeMessage(
+    staleUrlMock.events.runtimeMessage,
+    {
+      generationId:
+        documentArmResult.generationId,
+      source: MESSAGE_SOURCE,
+      type: "cancelArm"
+    },
+    originalDocumentSender
+  );
+
+  assert.equal(cancelResult.ok, true);
+  assert.deepEqual(
+    staleUrlMock.calls.debuggerDetach.filter(
+      ({ tabId }) =>
+        tabId === differentDocumentTabId
+    ),
+    [{ tabId: differentDocumentTabId }]
   );
 });

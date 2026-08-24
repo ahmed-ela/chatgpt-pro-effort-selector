@@ -191,12 +191,13 @@ On SPA navigation, the content script:
 - preserves conservative fail-closed or outcome-uncertain handling when navigation interrupts an active one-shot operation
 - permits only one replay-authorized, same-document blank-chat to exact `/c/WEB:<lowercase UUID>` transition during the active first-send lifecycle
 - uses `webNavigation` document identity to distinguish that History API transition from a reload or full-document navigation even when Chrome splits URL and `loading` updates across separate events
+- authenticates runtime messages against the content-script context's `chatgpt.com` origin, but binds an operation to the current top-level tab URL; Chrome can retain the context's initial `/` URL after ChatGPT promotes the same document to a saved `/c/<UUID>` route
 - ignores a status-only `tabs.onUpdated` loading signal when Chrome still reports the active operation's unchanged ChatGPT pathname
 - evaluates a top-frame `webNavigation.onCommitted` event with the armed operation's same `documentId` through the strict same-document route policy, because BFCache or prerender activation can recommit an existing document; a missing or different `documentId` remains a fail-closed replacement or reload
 - permits one later `WEB:` to canonical promotion only after the same generation continued a request with a submitted user-message id and the content script correlated the exact canonical target to the unique newly active conversation
 - keeps full-document loading, unrelated paths, an uncorrelated canonical target, and a second provisional or canonical transition fail-closed
 
-When an allowed history transition is accepted, the background updates the active operation's recorded pathname before persisting it. `tabs.onUpdated` alone never authorizes the route change. The background state API otherwise restores only a currently active operation whose recorded pathname matches the requesting page. A completed or unrelated tab audit is not restored into the destination chat.
+When an allowed history transition is accepted, the background updates the active operation's recorded pathname before persisting it. `tabs.onUpdated` alone never authorizes the route change. A fresh arm independently compares the current message tab URL with `tabs.get()` before attaching, so a stale content-script context URL cannot misbind the operation and a real route race still fails closed. The background state API otherwise restores only a currently active operation whose recorded pathname matches the requesting tab. A completed or unrelated tab audit is not restored into the destination chat.
 
 ## Duplicate protection
 

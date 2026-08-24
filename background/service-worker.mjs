@@ -415,6 +415,27 @@ function parseAllowedChatgptUrl(rawUrl) {
   }
 }
 
+function parseCurrentSenderTabUrl(sender) {
+  const parsedContextUrl = parseAllowedChatgptUrl(
+    sender.url
+  );
+  const parsedTabUrl = parseAllowedChatgptUrl(
+    sender.tab?.url
+  );
+
+  if (!parsedContextUrl || !parsedTabUrl) {
+    return null;
+  }
+
+  /*
+   * MessageSender.url belongs to the content-script context and can retain
+   * the document's initial URL after history.pushState(). The tab URL is the
+   * current top-level route, so prefer it only after independently proving
+   * that the sending context still belongs to chatgpt.com.
+   */
+  return parsedTabUrl;
+}
+
 function senderMatchesSession(sender, session) {
   if (
     sender.tab?.id !== session.tabId ||
@@ -431,9 +452,8 @@ function senderMatchesSession(sender, session) {
     return false;
   }
 
-  const parsedUrl = parseAllowedChatgptUrl(
-    sender.url ?? sender.tab?.url
-  );
+  const parsedUrl =
+    parseCurrentSenderTabUrl(sender);
 
   return (
     parsedUrl !== null &&
@@ -445,9 +465,8 @@ function senderOwnsSessionDocument(
   sender,
   session
 ) {
-  const parsedUrl = parseAllowedChatgptUrl(
-    sender.url ?? sender.tab?.url
-  );
+  const parsedContextUrl =
+    parseAllowedChatgptUrl(sender.url);
 
   return (
     sender.tab?.id === session.tabId &&
@@ -455,7 +474,7 @@ function senderOwnsSessionDocument(
     typeof session.documentId === "string" &&
     session.documentId.length > 0 &&
     sender.documentId === session.documentId &&
-    parsedUrl !== null
+    parsedContextUrl !== null
   );
 }
 
@@ -1408,9 +1427,8 @@ async function retrySentCleanup(session) {
 }
 
 async function armExtended(sender) {
-  const parsedUrl = parseAllowedChatgptUrl(
-    sender.url ?? sender.tab?.url
-  );
+  const parsedUrl =
+    parseCurrentSenderTabUrl(sender);
 
   if (
     !parsedUrl ||
@@ -2300,9 +2318,7 @@ async function initializeRuntimeState() {
 function getTabState(sender) {
   const tabId = sender.tab?.id;
   const parsedSenderUrl =
-    parseAllowedChatgptUrl(
-      sender.url ?? sender.tab?.url
-    );
+    parseCurrentSenderTabUrl(sender);
   const senderPath =
     parsedSenderUrl?.pathname ?? null;
 
