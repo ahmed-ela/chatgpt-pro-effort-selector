@@ -5,6 +5,7 @@ const MESSAGE_SOURCE =
   "chatgpt-pro-effort-selector";
 const TAB_ID = 41;
 const SECOND_TAB_ID = 42;
+const SEND_TAB_ID = 43;
 const TAB_URL =
   "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111";
 const UNRELATED_URL =
@@ -208,14 +209,14 @@ function sendRuntimeMessage(
   });
 }
 
+const mock = createChromeMock();
+globalThis.chrome = mock.chrome;
+
+await import(
+  "../background/service-worker.mjs"
+);
+
 test("keeps same-document commit noise armed and fails closed on real navigation", async () => {
-  const mock = createChromeMock();
-  globalThis.chrome = mock.chrome;
-
-  await import(
-    "../background/service-worker.mjs"
-  );
-
   const sender = {
     documentId: DOCUMENT_ID,
     frameId: 0,
@@ -441,5 +442,204 @@ test("keeps same-document commit noise armed and fails closed on real navigation
       .audits[String(SECOND_TAB_ID)]
       .error,
     "navigation"
+  );
+});
+
+test("sends the exact Pro Extended body through Fetch.continueRequest", async () => {
+  const sender = {
+    documentId: DOCUMENT_ID,
+    frameId: 0,
+    tab: {
+      id: SEND_TAB_ID,
+      url: TAB_URL
+    },
+    url: TAB_URL
+  };
+  const armResult = await sendRuntimeMessage(
+    mock.events.runtimeMessage,
+    {
+      source: MESSAGE_SOURCE,
+      type: "armExtended"
+    },
+    sender
+  );
+
+  assert.equal(armResult.ok, true);
+
+  const confirmResult =
+    await sendRuntimeMessage(
+      mock.events.runtimeMessage,
+      {
+        generationId:
+          armResult.generationId,
+        source: MESSAGE_SOURCE,
+        type: "confirmArmed"
+      },
+      sender
+    );
+
+  assert.deepEqual(confirmResult, {
+    generationId: armResult.generationId,
+    ok: true
+  });
+
+  const replayResult =
+    await sendRuntimeMessage(
+      mock.events.runtimeMessage,
+      {
+        generationId:
+          armResult.generationId,
+        source: MESSAGE_SOURCE,
+        type: "markReplayStarting"
+      },
+      sender
+    );
+
+  assert.deepEqual(replayResult, {
+    generationId: armResult.generationId,
+    ok: true
+  });
+
+  const submittedBody = {
+    client_prepare_state: "ready",
+    conversation_id: "conversation-id",
+    messages: [
+      {
+        author: { role: "user" },
+        id: "submitted-user-message"
+      }
+    ],
+    model: "gpt-5-6-pro",
+    thinking_effort: "standard"
+  };
+
+  mock.events.debuggerEvent.emit(
+    { tabId: SEND_TAB_ID },
+    "Fetch.requestPaused",
+    {
+      requestId: "paused-pro-request",
+      request: {
+        headers: {
+          "Content-Length": "321",
+          "X-Conduit-Token":
+            "do-not-replay",
+          "content-type":
+            "application/json",
+          "x-preserved": "yes"
+        },
+        method: "POST",
+        postData: JSON.stringify(
+          submittedBody
+        ),
+        url:
+          "https://chatgpt.com/backend-api/f/conversation"
+      },
+      resourceType: "Fetch"
+    }
+  );
+
+  await waitFor(() =>
+    mock.calls.debuggerCommands.some(
+      ({ method, target }) =>
+        target.tabId === SEND_TAB_ID &&
+        method === "Fetch.continueRequest"
+    )
+  );
+
+  const continuationCommands =
+    mock.calls.debuggerCommands.filter(
+      ({ method, target }) =>
+        target.tabId === SEND_TAB_ID &&
+        method === "Fetch.continueRequest"
+    );
+
+  assert.equal(
+    continuationCommands.length,
+    1,
+    "the qualifying request must be continued exactly once"
+  );
+
+  const continuation =
+    continuationCommands[0];
+  assert.equal(
+    continuation.parameters.requestId,
+    "paused-pro-request"
+  );
+
+  const continuedBody = JSON.parse(
+    Buffer.from(
+      continuation.parameters.postData,
+      "base64"
+    ).toString("utf8")
+  );
+
+  assert.deepEqual(
+    continuedBody,
+    {
+      ...submittedBody,
+      client_prepare_state: "none",
+      model: "gpt-5-6-pro",
+      thinking_effort: "extended"
+    },
+    "the continued body must preserve every field except the three authorized Pro Extended assignments"
+  );
+  assert.deepEqual(
+    continuation.parameters.headers,
+    [
+      {
+        name: "content-type",
+        value: "application/json"
+      },
+      {
+        name: "x-preserved",
+        value: "yes"
+      }
+    ]
+  );
+
+  await waitFor(() =>
+    mock.calls.sentMessages.some(
+      ({ message, tabId }) =>
+        tabId === SEND_TAB_ID &&
+        message.phase === "sent"
+    )
+  );
+
+  assert.deepEqual(
+    mock.calls.debuggerDetach.filter(
+      ({ tabId }) =>
+        tabId === SEND_TAB_ID
+    ),
+    [{ tabId: SEND_TAB_ID }],
+    "successful continuation must detach exactly once after cleanup"
+  );
+
+  const sentState = await sendRuntimeMessage(
+    mock.events.runtimeMessage,
+    {
+      source: MESSAGE_SOURCE,
+      type: "getState"
+    },
+    sender
+  );
+
+  assert.equal(sentState.activeOperation, false);
+  assert.equal(sentState.phase, "sent");
+  assert.equal(
+    sentState.label,
+    "Sent as Extended"
+  );
+  assert.equal(
+    sentState.submittedUserMessageId,
+    "submitted-user-message"
+  );
+  assert.deepEqual(
+    mock.storedValues.proEffortRuntimeV1
+      .audits[String(SEND_TAB_ID)].forced,
+    {
+      client_prepare_state: "none",
+      model: "gpt-5-6-pro",
+      thinking_effort: "extended"
+    }
   );
 });
