@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   CHATGPT_ORIGIN,
   CONVERSATION_PATH,
-  PRO_MODEL_SLUG,
   RequestValidationError,
   filterFreshRequestHeaders,
   findNewestUserMessageId,
@@ -14,7 +13,7 @@ import {
 
 function makeBody(overrides = {}) {
   return {
-    model: PRO_MODEL_SLUG,
+    model: "gpt-5-6-pro",
     thinking_effort: "standard",
     client_prepare_state: "ready",
     conversation_id: "conversation-id",
@@ -236,7 +235,7 @@ test("rejects non-string fresh header values instead of fabricating them", () =>
   );
 });
 
-test("changes only the three authorized top-level body fields", () => {
+test("preserves GPT-5.6 Pro and changes only the two effort fields", () => {
   const originalBody = makeBody();
   const originalClone =
     JSON.parse(JSON.stringify(originalBody));
@@ -272,7 +271,6 @@ test("changes only the three authorized top-level body fields", () => {
     JSON.stringify(mutatedBody)
   );
 
-  restored.model = originalClone.model;
   restored.thinking_effort =
     originalClone.thinking_effort;
   restored.client_prepare_state =
@@ -324,20 +322,56 @@ test("changes only the three authorized top-level body fields", () => {
   ]);
 });
 
-test("rejects a fresh request for any non-Pro model", () => {
-  assert.throws(
-    () =>
-      prepareExtendedContinuation(
-        makePause({
-          body: makeBody({
-            model: "gpt-5-6-sol"
-          })
-        })
-      ),
-    (error) =>
-      error instanceof RequestValidationError &&
-      error.code === "model_mismatch"
+test("preserves GPT-6 Pro and rewrites its observed Standard request shape", () => {
+  const originalBody = makeBody({
+    model: "gpt-6-pro",
+    client_prepare_state: "success"
+  });
+  const result = prepareExtendedContinuation(
+    makePause({ body: originalBody })
   );
+  const mutatedBody = JSON.parse(
+    Buffer.from(result.postDataBase64, "base64").toString("utf8")
+  );
+
+  assert.deepEqual(mutatedBody, {
+    ...originalBody,
+    thinking_effort: "extended",
+    client_prepare_state: "none"
+  });
+  assert.deepEqual(result.audit.original, {
+    model: "gpt-6-pro",
+    thinking_effort: "standard",
+    client_prepare_state: "success"
+  });
+  assert.deepEqual(result.audit.forced, {
+    model: "gpt-6-pro",
+    thinking_effort: "extended",
+    client_prepare_state: "none"
+  });
+});
+
+test("rejects non-Pro and unknown model slugs", () => {
+  for (const model of [
+    "gpt-5-6-sol",
+    "gpt-6",
+    "gpt-6-astra",
+    "gpt-7-pro",
+    "gpt-6-pro-preview",
+    "GPT-6-Pro",
+    ""
+  ]) {
+    assert.throws(
+      () =>
+        prepareExtendedContinuation(
+          makePause({ body: makeBody({ model }) })
+        ),
+      (error) =>
+        error instanceof RequestValidationError &&
+        error.code === "model_mismatch",
+      `unsupported model ${JSON.stringify(model)} must remain blocked`
+    );
+  }
 });
 
 test("requires model, thinking_effort, and client_prepare_state as own strings", () => {
@@ -347,7 +381,7 @@ test("requires model, thinking_effort, and client_prepare_state as own strings",
   });
 
   Object.assign(inherited, {
-    model: PRO_MODEL_SLUG,
+    model: "gpt-5-6-pro",
     messages: [
       {
         id: "fresh-id",

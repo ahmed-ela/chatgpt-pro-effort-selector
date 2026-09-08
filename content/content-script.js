@@ -331,7 +331,9 @@
 
     return (
       text === "Pro" ||
-      text === "GPT-5.6 Pro"
+      text === "GPT-5.6 Pro" ||
+      text === "6 Pro" ||
+      text === "GPT-6 Pro"
     );
   }
 

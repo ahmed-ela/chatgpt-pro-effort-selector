@@ -118,7 +118,7 @@ A blank new chat has no canonical conversation UUID, so its mode is kept in that
 Extended applies to a captured composer submission only when:
 
 1. the current canonical conversation's stored mode, or the current tab-session blank-chat draft mode, is Extended; and
-2. the extension can identify the exact visible composer model as `Pro` or `GPT-5.6 Pro`.
+2. the extension can identify the exact visible composer model as `Pro`, `GPT-5.6 Pro`, `6 Pro`, or `GPT-6 Pro`.
 
 The selector is not shown for GPT-5.6 Sol, and a fresh Sol request is never rewritten to Pro.
 
@@ -141,16 +141,15 @@ For every captured normal send-button, Enter, or form submission while that chat
 12. Exactly one qualifying pause must occur within 10 seconds.
 13. The fresh body must:
     - be valid JSON
-    - have `model === "gpt-5-6-pro"`
+    - have `model === "gpt-5-6-pro"` or `model === "gpt-6-pro"`
     - own string property `thinking_effort`
     - own string property `client_prepare_state`
     - contain a nonempty newest user message id
 14. A fresh semantic JSON clone is created.
 15. Only these top-level values are assigned:
-    - `model = "gpt-5-6-pro"`
     - `thinking_effort = "extended"`
     - `client_prepare_state = "none"`
-16. All other fresh body fields, including the fresh user message id, are preserved.
+16. All other fresh body fields, including the selected model and fresh user message id, are preserved.
 17. Fresh request headers are preserved except:
     - `x-conduit-token`
     - `content-length`
@@ -167,6 +166,8 @@ Fetch.enable({ patterns: [] })
 23. The extension then detaches the debugger.
 
 That debugger/request operation is one-shot for one fresh composer submission. After it ends, the conversation's Extended mode remains selected. A later captured composer submission in the same chat creates a new generation and freshly repeats the arm, confirmation, replay, mutation, continuation, and cleanup lifecycle.
+
+A controlled live request check on September 7, 2026 used a CDP harness to reproduce the extension's two-field Extended rewrite. The installed extension UI was not live tested. The check observed GPT-6 Pro as `6 Pro`, with `model: "gpt-6-pro"`, `thinking_effort: "standard"`, and `client_prepare_state: "success"` on the untouched request. The reproduced rewrite returned HTTP 200, a completed response, and server response metadata identifying `gpt-6-pro` with `thinking_effort: "extended"`. The untouched comparison reported `thinking_effort: "standard"`. This verifies acceptance of the setting for those requests; it does not measure internal compute or response quality.
 
 Changing the current conversation back to Standard is the normal way to end its Extended mode. Request success, warning, failure, timeout, cleanup state, or uncertainty does not reset or consume the saved mode.
 

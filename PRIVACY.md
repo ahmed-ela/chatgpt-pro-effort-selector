@@ -24,8 +24,8 @@ When the user selects Extended and submits through ChatGPT's normal composer, th
 
 - parses the outgoing JSON request body, which includes the user's prompt and may include other conversation data;
 - handles the request headers supplied by Chrome, which may include authentication-related values;
-- verifies that the request is a fresh GPT-5.6 Pro conversation request;
-- sets the top-level `model` to `gpt-5-6-pro`, `thinking_effort` to `extended`, and `client_prepare_state` to `none`; and
+- verifies that the request is a fresh GPT-5.6 Pro (`gpt-5-6-pro`) or GPT-6 Pro (`gpt-6-pro`) conversation request;
+- preserves the selected `model`, sets the top-level `thinking_effort` to `extended` and `client_prepare_state` to `none`; and
 - omits the `x-conduit-token` and `content-length` transport headers while preserving the other fresh headers, then continues that request to its original ChatGPT destination, clears interception, and detaches the debugger.
 
 The full request body and header values exist only in memory during that operation. They are not logged, written to extension storage, sent to the developer, or sent to a new destination. The extension does not intercept ChatGPT response bodies.

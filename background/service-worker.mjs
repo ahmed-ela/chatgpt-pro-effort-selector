@@ -594,7 +594,7 @@ function statusMessageFor(code, status) {
     malformed_request:
       "The fresh conversation request did not match the required schema, so it was blocked.",
     model_mismatch:
-      "The fresh request was not exactly gpt-5-6-pro, so it was blocked.",
+      "The fresh request was not a supported Pro model, so it was blocked.",
     duplicate_qualifying_request:
       "More than one qualifying conversation request was observed. The paused requests were aborted where Chrome still allowed it.",
     debugger_detached:

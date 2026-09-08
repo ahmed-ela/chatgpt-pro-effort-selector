@@ -28,7 +28,7 @@
   <img src="docs/images/standard-to-extended-thinking-effort.png" alt="Chrome request metadata showing thinking effort changing from standard to extended" width="1200">
 </p>
 
-This dependency-free Manifest V3 extension adds a compact **Standard / Extended** selector beside ChatGPT's visible **Pro** or **GPT-5.6 Pro** model control. It does not replace ChatGPT's model menu.
+This dependency-free Manifest V3 extension adds a compact **Standard / Extended** selector beside ChatGPT's visible **Pro**, **GPT-5.6 Pro**, **6 Pro**, or **GPT-6 Pro** model control. It accepts the exact GPT-5.6 Pro and GPT-6 Pro request slugs and preserves the selected model. It does not replace ChatGPT's model menu.
 
 > [!WARNING]
 > This unofficial extension uses Chrome's powerful `debugger` permission. Review the source before installing it. ChatGPT or Chrome changes can break it without notice.

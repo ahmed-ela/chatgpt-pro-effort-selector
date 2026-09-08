@@ -1,9 +1,12 @@
 export const CONVERSATION_PATH = "/backend-api/f/conversation";
 export const CHATGPT_ORIGIN = "https://chatgpt.com";
-export const PRO_MODEL_SLUG = "gpt-5-6-pro";
 export const EXTENDED_EFFORT = "extended";
 export const FORCED_CLIENT_PREPARE_STATE = "none";
 
+const SUPPORTED_PRO_MODEL_SLUGS = new Set([
+  "gpt-5-6-pro",
+  "gpt-6-pro"
+]);
 const ALLOWED_RESOURCE_TYPES = new Set(["XHR", "Fetch"]);
 const REMOVED_HEADER_NAMES = new Set([
   "x-conduit-token",
@@ -283,10 +286,10 @@ export function prepareExtendedContinuation(pausedEvent) {
   requireOwnString(parsedBody, "thinking_effort");
   requireOwnString(parsedBody, "client_prepare_state");
 
-  if (parsedBody.model !== PRO_MODEL_SLUG) {
+  if (!SUPPORTED_PRO_MODEL_SLUGS.has(parsedBody.model)) {
     fail(
       "model_mismatch",
-      "The fresh request was not exactly gpt-5-6-pro."
+      "The fresh request was not a supported Pro model."
     );
   }
 
@@ -301,11 +304,10 @@ export function prepareExtendedContinuation(pausedEvent) {
 
   /*
    * parsedBody came from fresh JSON. This JSON round trip creates a fresh
-   * semantic clone before the only three authorized top-level assignments.
+   * semantic clone before the only two authorized top-level assignments.
    */
   const mutatedBody = JSON.parse(JSON.stringify(parsedBody));
 
-  mutatedBody.model = PRO_MODEL_SLUG;
   mutatedBody.thinking_effort = EXTENDED_EFFORT;
   mutatedBody.client_prepare_state =
     FORCED_CLIENT_PREPARE_STATE;
@@ -327,7 +329,7 @@ export function prepareExtendedContinuation(pausedEvent) {
       resourceType: identity.resourceType,
       original: originalValues,
       forced: {
-        model: PRO_MODEL_SLUG,
+        model: parsedBody.model,
         thinking_effort: EXTENDED_EFFORT,
         client_prepare_state: FORCED_CLIENT_PREPARE_STATE
       },

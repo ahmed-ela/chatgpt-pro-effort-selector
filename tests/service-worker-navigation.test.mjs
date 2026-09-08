@@ -448,7 +448,14 @@ test("keeps same-document commit noise armed and fails closed on real navigation
   );
 });
 
-test("sends the exact Pro Extended body through Fetch.continueRequest", async () => {
+async function verifyExtendedContinuation(model, prepareState) {
+  const mock = createChromeMock();
+  globalThis.chrome = mock.chrome;
+
+  await import(
+    `../background/service-worker.mjs?extended-model=${model}`
+  );
+
   const sender = {
     documentId: DOCUMENT_ID,
     frameId: 0,
@@ -504,7 +511,7 @@ test("sends the exact Pro Extended body through Fetch.continueRequest", async ()
   });
 
   const submittedBody = {
-    client_prepare_state: "ready",
+    client_prepare_state: prepareState,
     conversation_id: "conversation-id",
     messages: [
       {
@@ -512,7 +519,7 @@ test("sends the exact Pro Extended body through Fetch.continueRequest", async ()
         id: "submitted-user-message"
       }
     ],
-    model: "gpt-5-6-pro",
+    model,
     thinking_effort: "standard"
   };
 
@@ -581,10 +588,9 @@ test("sends the exact Pro Extended body through Fetch.continueRequest", async ()
     {
       ...submittedBody,
       client_prepare_state: "none",
-      model: "gpt-5-6-pro",
       thinking_effort: "extended"
     },
-    "the continued body must preserve every field except the three authorized Pro Extended assignments"
+    "the continued body must preserve every field except the two authorized effort assignments"
   );
   assert.deepEqual(
     continuation.parameters.headers,
@@ -641,11 +647,19 @@ test("sends the exact Pro Extended body through Fetch.continueRequest", async ()
       .audits[String(SEND_TAB_ID)].forced,
     {
       client_prepare_state: "none",
-      model: "gpt-5-6-pro",
+      model,
       thinking_effort: "extended"
     }
   );
-});
+}
+
+test("sends GPT-5.6 Pro Extended through Fetch.continueRequest without changing model", () =>
+  verifyExtendedContinuation("gpt-5-6-pro", "ready")
+);
+
+test("sends GPT-6 Pro Extended through Fetch.continueRequest without changing model", () =>
+  verifyExtendedContinuation("gpt-6-pro", "success")
+);
 
 test("uses the current tab URL when MessageSender.url is stale", async () => {
   const staleUrlMock = createChromeMock();

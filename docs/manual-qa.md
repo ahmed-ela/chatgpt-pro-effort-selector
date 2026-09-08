@@ -6,13 +6,15 @@ Use a unique marker in every test prompt. When checking backend metadata, keep D
 
 1. Open ChatGPT with a non-Pro model selected.
 2. Confirm the extension selector is absent.
-3. Select the visible Pro model.
-4. Confirm the selector appears beside the composer model control.
+3. Select each available supported Pro model: GPT-5.6 Pro and GPT-6 Pro (shown as `6 Pro`).
+4. Confirm the selector appears beside each supported composer model control.
 5. Select GPT-5.6 Sol.
 6. Confirm the selector disappears.
 7. Confirm no GPT-5.6 Sol request is rewritten to Pro.
 8. Navigate between chats using ChatGPT's SPA navigation.
 9. Confirm only one selector exists after rerenders.
+
+For GPT-6 Pro, confirm the fresh request uses `model: "gpt-6-pro"` and the continued request preserves that model while setting `thinking_effort: "extended"` and `client_prepare_state: "none"`. Confirm the completed conversation's backend metadata before treating request continuation as proof that the server honored Extended.
 
 ## Native visual behavior
 

@@ -34,7 +34,7 @@ Unofficial; not affiliated with, endorsed by, or published by OpenAI.
 
 ### `debugger`
 
-Required only for Extended mode. After the user selects Extended and performs a normal ChatGPT composer submission, the extension revalidates and attaches to that exact top-level `https://chatgpt.com` tab and enables two exact-origin request-stage Fetch patterns for ChatGPT's conversation endpoint. It validates exactly one fresh `POST /backend-api/f/conversation` request for `gpt-5-6-pro`, sets only the top-level `model`, `thinking_effort`, and `client_prepare_state` fields to their required Extended values, omits the `x-conduit-token` and `content-length` transport headers while preserving the other fresh headers, continues the request to ChatGPT, clears interception, and detaches. Unrelated paused requests are immediately continued. Standard mode never attaches the debugger. The extension also detaches or fails closed on timeout, mismatch, duplicate request, navigation, tab closure, or lost state. If Chrome repeatedly rejects detachment after a continued request, the full request body and header values have already been released, the extension reports a cleanup warning, and that tab remains blocked from another one-shot operation until the debugger session ends.
+Required only for Extended mode. After the user selects Extended and performs a normal ChatGPT composer submission, the extension revalidates and attaches to that exact top-level `https://chatgpt.com` tab and enables two exact-origin request-stage Fetch patterns for ChatGPT's conversation endpoint. It validates exactly one fresh `POST /backend-api/f/conversation` request for `gpt-5-6-pro` or `gpt-6-pro`, preserves the selected model, sets only the top-level `thinking_effort` and `client_prepare_state` fields to their required Extended values, omits the `x-conduit-token` and `content-length` transport headers while preserving the other fresh headers, continues the request to ChatGPT, clears interception, and detaches. Unrelated paused requests are immediately continued. Standard mode never attaches the debugger. The extension also detaches or fails closed on timeout, mismatch, duplicate request, navigation, tab closure, or lost state. If Chrome repeatedly rejects detachment after a continued request, the full request body and header values have already been released, the extension reports a cleanup warning, and that tab remains blocked from another one-shot operation until the debugger session ends.
 
 ### `storage`
 
@@ -92,9 +92,9 @@ The icon and promotional tile use the original monochrome two-bar effort mark. E
 
 ## Private reviewer test instructions
 
-The dashboard limits **Additional instructions** to 500 characters. Paste this 498-character note:
+The dashboard limits **Additional instructions** to 500 characters. Paste this 472-character note:
 
-> Requires Chrome 120+ and a reviewer-authorized ChatGPT account with Pro/GPT-5.6 Pro; no credentials are provided. Keep DevTools and other debugger tools detached. Open chatgpt.com, choose Pro, and confirm Sta.. appears with Standard/Extended options. In Standard, send normally and confirm no debugger indicator. Select Extended, send normally, and confirm one message, a response, a brief debugger indicator, then detachment. Reload the saved chat to confirm Ext.. persists; return it to Standard.
+> Requires Chrome 120+ and an authorized ChatGPT account with GPT-5.6 Pro or GPT-6 Pro; no credentials provided. Keep DevTools and other debugger tools detached. Open chatgpt.com, choose Pro or 6 Pro, and confirm Sta.. offers Standard/Extended. In Standard, send and confirm no debugger indicator. Select Extended, send, and confirm one message, a response, a brief debugger indicator, then detachment. Reload the saved chat to confirm Ext.. persists; return it to Standard.
 
 Before submission, resolve how reviewers will obtain authorized ChatGPT Pro access. If Google requires publisher-supplied test credentials, provide only a dedicated, policy-compliant review account in the private dashboard field; never commit credentials to this repository or place them in the public listing.
 
