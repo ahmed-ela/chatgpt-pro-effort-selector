@@ -236,6 +236,66 @@ test("allows a continued WEB send to promote once to a canonical route", () => {
   }
 });
 
+test("allows local-chatgpt provisional routes and only their correlated promotion", () => {
+  const canonicalPath = "/c/22222222-2222-4222-8222-222222222222";
+  for (const separator of [":", "%3A", "%3a"]) {
+    const temporaryPath = `/c/local-chatgpt${separator}11111111-1111-4111-8111-111111111111`;
+    const provisional = {
+      currentPath: "/",
+      nextUrl: `https://chatgpt.com${temporaryPath}`,
+      sameDocument: true,
+      replayAuthorized: true,
+      uiReplayStarted: true,
+      phase: "armed"
+    };
+    assert.deepEqual(decideActiveSessionNavigation(provisional), {
+      action: "advance",
+      pagePath: temporaryPath,
+      transition: "provisional"
+    });
+    for (const overrides of [
+      { sameDocument: false },
+      { replayAuthorized: false },
+      { uiReplayStarted: false },
+      { provisionalTransitionUsed: true },
+      { nextUrl: `https://example.com${temporaryPath}` },
+      { nextUrl: `https://chatgpt.com${temporaryPath}/` },
+      { nextUrl: "https://chatgpt.com/c/local-chatgpt%3Abad" }
+    ]) {
+      assert.deepEqual(decideActiveSessionNavigation({ ...provisional, ...overrides }), {
+        action: "fail"
+      });
+    }
+
+    const promotion = {
+      ...provisional,
+      currentPath: temporaryPath,
+      nextUrl: `https://chatgpt.com${canonicalPath}`,
+      provisionalTransitionUsed: true,
+      canonicalTargetPath: canonicalPath,
+      requestContinued: true,
+      hasSubmittedUserMessageId: true,
+      phase: "cleaning"
+    };
+    assert.deepEqual(decideActiveSessionNavigation(promotion), {
+      action: "advance",
+      pagePath: canonicalPath,
+      transition: "canonical"
+    });
+    for (const overrides of [
+      { sameDocument: false },
+      { canonicalTransitionUsed: true },
+      { canonicalTargetPath: null },
+      { requestContinued: false },
+      { hasSubmittedUserMessageId: false }
+    ]) {
+      assert.deepEqual(decideActiveSessionNavigation({ ...promotion, ...overrides }), {
+        action: "fail"
+      });
+    }
+  }
+});
+
 test("keeps full loads and unrelated active-session navigation fail-closed", () => {
   const variants = [
     {

@@ -104,9 +104,9 @@ A blank new chat has no canonical conversation UUID, so its mode is kept in that
 - it defaults to Standard
 - selecting either option survives reloads in the same tab
 - selecting Extended applies to its first captured normal Pro composer submission
-- ChatGPT's provisional `/c/WEB:<lowercase UUID>` URL is treated as the same new-chat lifecycle, so it does not cancel the first Extended send or become a persistent storage identity
+- ChatGPT's provisional `/c/local-chatgpt:<lowercase UUID>` URL (including the URL-encoded `%3A` or `%3a` separator) and the legacy `/c/WEB:<lowercase UUID>` URL are treated as the same new-chat lifecycle, so they do not cancel the first Extended send or become persistent storage identities
 - once that send is known to have succeeded and exactly one newly active canonical `/c/<lowercase UUID>` conversation appears, the selected mode is written to that conversation's independent key
-- while ChatGPT still displays the provisional `WEB:` URL, a bounded tab-session path-to-conversation map points mode reads and changes at that canonical conversation; reloading or returning with Back therefore preserves the chat's current selection
+- while ChatGPT still displays a recognized provisional URL, a bounded tab-session path-to-conversation map points mode reads and changes at that canonical conversation; reloading or returning with Back therefore preserves the chat's current selection
 - while first-send correlation is still finishing, the content script extracts canonical conversation UUID keys from links already present in ChatGPT's page; a generation-scoped reload-recovery record is created only when there are no more than 512 keys, lives only in the page's `sessionStorage`, is never accepted after two minutes, is cleared on completion, failure, an expired read, a scheduled expiry callback, or page-session end, and may resume binding only when the background reports that exact generation as sent or warning with a submitted user-message id
 - a pass-through Standard first send is tracked across the draft-to-saved route boundary, so selecting Extended before ChatGPT finishes assigning the new URL still binds Extended to the created conversation
 - merely navigating from a blank draft to an existing saved conversation does not copy the draft mode
@@ -142,7 +142,7 @@ For every captured normal send-button, Enter, or form submission while that chat
 13. The fresh body must:
     - be valid JSON
     - have `model === "gpt-5-6-pro"` or `model === "gpt-6-pro"`
-    - own string property `thinking_effort`
+    - omit `thinking_effort` or own it as a string; present null, object, array, boolean, or numeric values are rejected
     - own string property `client_prepare_state`
     - contain a nonempty newest user message id
 14. A fresh semantic JSON clone is created.
@@ -190,12 +190,12 @@ On SPA navigation, the content script:
 - loads the destination saved conversation's independent mode before a captured submission is allowed to replay
 - blocks rather than replaying a captured submission if the destination mode cannot be loaded or the route changes again during that load
 - preserves conservative fail-closed or outcome-uncertain handling when navigation interrupts an active one-shot operation
-- permits only one replay-authorized, same-document blank-chat to exact `/c/WEB:<lowercase UUID>` transition during the active first-send lifecycle
+- permits only one replay-authorized, same-document blank-chat to a recognized provisional `local-chatgpt:` or legacy `WEB:` route during the active first-send lifecycle
 - uses `webNavigation` document identity to distinguish that History API transition from a reload or full-document navigation even when Chrome splits URL and `loading` updates across separate events
 - authenticates runtime messages against the content-script context's `chatgpt.com` origin, but binds an operation to the current top-level tab URL; Chrome can retain the context's initial `/` URL after ChatGPT promotes the same document to a saved `/c/<UUID>` route
 - ignores a status-only `tabs.onUpdated` loading signal when Chrome still reports the active operation's unchanged ChatGPT pathname
 - evaluates a top-frame `webNavigation.onCommitted` event with the armed operation's same `documentId` through the strict same-document route policy, because BFCache or prerender activation can recommit an existing document; a missing or different `documentId` remains a fail-closed replacement or reload
-- permits one later `WEB:` to canonical promotion only after the same generation continued a request with a submitted user-message id and the content script correlated the exact canonical target to the unique newly active conversation
+- permits one later provisional-to-canonical promotion only after the same generation continued a request with a submitted user-message id and the content script correlated the exact canonical target to the unique newly active conversation
 - keeps full-document loading, unrelated paths, an uncorrelated canonical target, and a second provisional or canonical transition fail-closed
 
 When an allowed history transition is accepted, the background updates the active operation's recorded pathname before persisting it. `tabs.onUpdated` alone never authorizes the route change. A fresh arm independently compares the current message tab URL with `tabs.get()` before attaching, so a stale content-script context URL cannot misbind the operation and a real route race still fails closed. The background state API otherwise restores only a currently active operation whose recorded pathname matches the requesting tab. A completed or unrelated tab audit is not restored into the destination chat.
@@ -285,7 +285,7 @@ The latest operation for each tab uses only this redacted audit shape:
 - exact pathname
 - resource type
 - original and forced `model`
-- original and forced `thinking_effort`
+- original and forced `thinking_effort`; the original is `null` when the request omitted that field, not an inferred `"standard"` value (an explicitly null request field is rejected)
 - original and forced `client_prepare_state`
 - names, not values, of removed headers
 - submitted user message id
@@ -314,7 +314,7 @@ Used for:
 - deterministic retirement of the obsolete global `effortPreference` key
 - ephemeral redacted one-shot state in `chrome.storage.session`
 
-The unsaved blank-chat mode uses the page's same-origin `sessionStorage`, not the extension `storage` permission. It stores the scalar string `standard` or `extended`. After a provisional `WEB:` chat is correlated to exactly one saved conversation, it also keeps a bounded map of recent temporary paths to canonical conversation UUIDs so reloads and same-tab Back navigation keep using each saved chat's mode. During first-send correlation, a maximum-two-minute pending record contains only the generation id, selected mode, route identifiers, timestamp, and preexisting conversation keys; recovery still requires matching successful background state. It never stores prompt or response content.
+The unsaved blank-chat mode uses the page's same-origin `sessionStorage`, not the extension `storage` permission. It stores the scalar string `standard` or `extended`. After a recognized provisional chat is correlated to exactly one saved conversation, it also keeps a bounded map of recent temporary paths to canonical conversation UUIDs so reloads and same-tab Back navigation keep using each saved chat's mode. During first-send correlation, a maximum-two-minute pending record contains only the generation id, selected mode, route identifiers, timestamp, and preexisting conversation keys; recovery still requires matching successful background state. It never stores prompt or response content.
 
 ### `debugger`
 

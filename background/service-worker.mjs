@@ -27,7 +27,7 @@ const SESSION_STORAGE_KEY = "proEffortRuntimeV1";
 const CONVERSATION_UUID_PATH_RE =
   /^\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 const TEMPORARY_CONVERSATION_PATH_RE =
-  /^\/c\/WEB:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  /^\/c\/(?:WEB:|local-chatgpt(?::|%3[Aa]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const FETCH_PATTERNS = Object.freeze([
   Object.freeze({
@@ -1090,7 +1090,7 @@ async function authorizeCanonicalPromotion(
         session.pagePath
     ) {
       /*
-       * A status-only loading update may have sampled the still-current WEB
+       * A status-only loading update may have sampled the still-current temporary
        * URL before Chrome publishes the canonical History API update. It is
        * not a competing canonical target.
        */

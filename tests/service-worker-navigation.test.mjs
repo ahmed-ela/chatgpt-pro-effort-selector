@@ -448,12 +448,12 @@ test("keeps same-document commit noise armed and fails closed on real navigation
   );
 });
 
-async function verifyExtendedContinuation(model, prepareState) {
+async function verifyExtendedContinuation(model, prepareState, omitEffort = false) {
   const mock = createChromeMock();
   globalThis.chrome = mock.chrome;
 
   await import(
-    `../background/service-worker.mjs?extended-model=${model}`
+    `../background/service-worker.mjs?extended-model=${model}&omit-effort=${omitEffort}`
   );
 
   const sender = {
@@ -522,6 +522,9 @@ async function verifyExtendedContinuation(model, prepareState) {
     model,
     thinking_effort: "standard"
   };
+  if (omitEffort) {
+    delete submittedBody.thinking_effort;
+  }
 
   mock.events.debuggerEvent.emit(
     { tabId: SEND_TAB_ID },
@@ -644,6 +647,15 @@ async function verifyExtendedContinuation(model, prepareState) {
   );
   assert.deepEqual(
     mock.storedValues.proEffortRuntimeV1
+      .audits[String(SEND_TAB_ID)].original,
+    {
+      client_prepare_state: prepareState,
+      model,
+      thinking_effort: omitEffort ? null : "standard"
+    }
+  );
+  assert.deepEqual(
+    mock.storedValues.proEffortRuntimeV1
       .audits[String(SEND_TAB_ID)].forced,
     {
       client_prepare_state: "none",
@@ -660,6 +672,137 @@ test("sends GPT-5.6 Pro Extended through Fetch.continueRequest without changing 
 test("sends GPT-6 Pro Extended through Fetch.continueRequest without changing model", () =>
   verifyExtendedContinuation("gpt-6-pro", "success")
 );
+
+test("sends GPT-6 Pro Extended when the native request omits effort and persists a null original", () =>
+  verifyExtendedContinuation("gpt-6-pro", "success", true)
+);
+
+test("continues new GPT-6 chats through local routes and correlated canonical promotion", async () => {
+  for (const separator of [":", "%3A", "%3a"]) {
+    const routeMock = createChromeMock();
+    globalThis.chrome = routeMock.chrome;
+    let releaseCleanup;
+    const sendCommand = routeMock.chrome.debugger.sendCommand;
+    routeMock.chrome.debugger.sendCommand = (target, method, parameters, callback) => {
+      sendCommand(target, method, parameters, (result) => {
+        if (method === "Fetch.enable" && parameters.patterns.length === 0) {
+          // Hold cleanup so navigation can exercise the post-send promotion window.
+          releaseCleanup = () => callback(result);
+        } else {
+          callback(result);
+        }
+      });
+    };
+
+    await import(`../background/service-worker.mjs?local-route=${encodeURIComponent(separator)}`);
+
+    const temporaryPath = `/c/local-chatgpt${separator}33333333-3333-4333-8333-333333333333`;
+    const temporaryUrl = `https://chatgpt.com${temporaryPath}`;
+    const sender = {
+      documentId: DOCUMENT_ID,
+      frameId: 0,
+      tab: { id: SEND_TAB_ID, url: "https://chatgpt.com/" },
+      url: "https://chatgpt.com/"
+    };
+    routeMock.tabUrls.set(SEND_TAB_ID, sender.tab.url);
+    const arm = await sendRuntimeMessage(routeMock.events.runtimeMessage, {
+      source: MESSAGE_SOURCE,
+      type: "armExtended"
+    }, sender);
+    assert.equal(arm.ok, true);
+    for (const type of ["confirmArmed", "markReplayStarting"]) {
+      const result = await sendRuntimeMessage(routeMock.events.runtimeMessage, {
+        source: MESSAGE_SOURCE,
+        generationId: arm.generationId,
+        type
+      }, sender);
+      assert.equal(result.ok, true);
+    }
+
+    sender.tab.url = temporaryUrl;
+    routeMock.tabUrls.set(SEND_TAB_ID, temporaryUrl);
+    routeMock.events.historyStateUpdated.emit({
+      documentId: DOCUMENT_ID,
+      frameId: 0,
+      tabId: SEND_TAB_ID,
+      url: temporaryUrl
+    });
+    await waitFor(() =>
+      routeMock.storedValues.proEffortRuntimeV1.active[SEND_TAB_ID]?.pagePath === temporaryPath
+    );
+    assert.equal(routeMock.calls.debuggerDetach.length, 0);
+
+    routeMock.events.debuggerEvent.emit({ tabId: SEND_TAB_ID }, "Fetch.requestPaused", {
+      requestId: "new-chat-request",
+      resourceType: "Fetch",
+      request: {
+        method: "POST",
+        url: "https://chatgpt.com/backend-api/f/conversation",
+        headers: { "content-type": "application/json" },
+        postData: JSON.stringify({
+          model: "gpt-6-pro",
+          client_prepare_state: "success",
+          messages: [{ id: "new-chat-user", author: { role: "user" } }]
+        })
+      }
+    });
+    await waitFor(() => typeof releaseCleanup === "function");
+
+    const canonicalPath = new URL(TAB_URL).pathname;
+    sender.tab.url = TAB_URL;
+    routeMock.tabUrls.set(SEND_TAB_ID, TAB_URL);
+    routeMock.events.historyStateUpdated.emit({
+      documentId: DOCUMENT_ID,
+      frameId: 0,
+      tabId: SEND_TAB_ID,
+      url: TAB_URL
+    });
+    await delay(25);
+    assert.equal(
+      routeMock.storedValues.proEffortRuntimeV1.active[SEND_TAB_ID].pagePath,
+      temporaryPath,
+      "the canonical route must wait for correlation authorization"
+    );
+    const promotion = await sendRuntimeMessage(routeMock.events.runtimeMessage, {
+      source: MESSAGE_SOURCE,
+      type: "authorizeCanonicalPromotion",
+      generationId: arm.generationId,
+      targetPath: canonicalPath
+    }, sender);
+    assert.equal(promotion.ok, true);
+    await waitFor(() =>
+      routeMock.storedValues.proEffortRuntimeV1.active[SEND_TAB_ID]?.pagePath === canonicalPath
+    );
+    const repeatedPromotion = await sendRuntimeMessage(routeMock.events.runtimeMessage, {
+      source: MESSAGE_SOURCE,
+      type: "authorizeCanonicalPromotion",
+      generationId: arm.generationId,
+      targetPath: canonicalPath
+    }, sender);
+    assert.equal(repeatedPromotion.ok, false);
+    assert.equal(repeatedPromotion.code, "canonical_promotion_not_current");
+
+    releaseCleanup();
+    await waitFor(() => routeMock.calls.sentMessages.some(
+      ({ message }) => message.generationId === arm.generationId && message.phase === "sent"
+    ));
+    assert.equal(routeMock.calls.debuggerDetach.length, 1);
+    assert.equal(routeMock.calls.debuggerCommands.some(
+      ({ method }) => method === "Fetch.failRequest"
+    ), false);
+    const continuations = routeMock.calls.debuggerCommands.filter(
+      ({ method }) => method === "Fetch.continueRequest"
+    );
+    assert.equal(continuations.length, 1);
+    const body = JSON.parse(Buffer.from(
+      continuations[0].parameters.postData, "base64"
+    ).toString("utf8"));
+    assert.equal(body.model, "gpt-6-pro");
+    assert.equal(body.thinking_effort, "extended");
+    assert.equal(body.messages[0].id, "new-chat-user");
+    assert.equal(routeMock.storedValues.proEffortRuntimeV1.active[SEND_TAB_ID], undefined);
+  }
+});
 
 test("uses the current tab URL when MessageSender.url is stale", async () => {
   const staleUrlMock = createChromeMock();

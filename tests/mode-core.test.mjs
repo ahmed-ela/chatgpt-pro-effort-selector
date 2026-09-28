@@ -331,6 +331,74 @@ test("persists a WEB route binding to exactly one canonical conversation", () =>
   );
 });
 
+test("preserves local-chatgpt draft adoption and saved mode across reloads", () => {
+  const blank = parseChatRoute("https://chatgpt.com/");
+  const saved = parseChatRoute(`https://chatgpt.com/c/${CHAT_B}`);
+  const generationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+  for (const separator of [":", "%3A", "%3a"]) {
+    const url = `https://chatgpt.com/c/local-chatgpt${separator}${CHAT_A}`;
+    const temporary = parseChatRoute(url);
+    const storage = createMemoryStorage();
+    persistDraftModeToSessionStorage(storage, EXTENDED);
+
+    assert.equal(isTemporaryChatRoute(temporary), true);
+    assert.equal(isProvisionalDraftTransition(blank, temporary), true);
+    assert.equal(routeContinuesDraftLifecycle(blank, temporary), true);
+    assert.equal(readDraftModeFromSessionStorage(storage), EXTENDED);
+    assert.equal(temporary.storageKey, null);
+
+    const pending = persistPendingDraftAdoptionToSessionStorage(storage, {
+      sourceRoute: blank,
+      temporaryRoute: temporary,
+      targetRoute: saved,
+      generationId,
+      draftMode: EXTENDED,
+      createdAt: 10_000,
+      preexistingConversationKeys: []
+    });
+    assert.ok(pending);
+    for (const route of [parseChatRoute(url), saved]) {
+      assert.deepEqual(
+        readPendingDraftAdoptionFromSessionStorage(storage, route, 10_001),
+        pending
+      );
+    }
+    assert.equal(shouldRestorePendingDraftAdoption(pending, {
+      ok: true,
+      generationId,
+      phase: "sent",
+      submittedUserMessageId: "submitted-user-message"
+    }), true);
+
+    persistDraftBindingToSessionStorage(storage, temporary, saved);
+    const reloadedRoute = parseChatRoute(url);
+    const binding = readDraftBindingFromSessionStorage(storage, reloadedRoute);
+    const boundRoute = conversationRouteForBinding(binding, reloadedRoute);
+    assert.deepEqual(boundRoute, saved);
+    assert.equal(readModeForRoute({ [saved.storageKey]: EXTENDED }, boundRoute), EXTENDED);
+    assert.equal(conversationRouteForBinding(binding, parseChatRoute(
+      `https://chatgpt.com/c/local-chatgpt${separator}${CHAT_B}`
+    )), null);
+  }
+});
+
+test("rejects foreign and malformed temporary conversation routes", () => {
+  for (const url of [
+    `https://example.com/c/local-chatgpt%3A${CHAT_A}`,
+    `http://chatgpt.com/c/local-chatgpt%3A${CHAT_A}`,
+    `https://example.com/c/WEB:${CHAT_A}`,
+    `https://chatgpt.com/c/local-chatgpt%3A${CHAT_WITH_HEX.toUpperCase()}`,
+    `https://chatgpt.com/c/LOCAL-CHATGPT:${CHAT_A}`,
+    `https://chatgpt.com/c/local-chatgpt%253A${CHAT_A}`,
+    `https://chatgpt.com/c/local-chatgpt%3A${CHAT_A}/`,
+    `https://chatgpt.com/c/local-chatgpt%3A${CHAT_A}%2Fextra`,
+    "https://chatgpt.com/c/local-chatgpt%3Anot-a-uuid"
+  ]) {
+    assert.equal(isTemporaryChatRoute(parseChatRoute(url)), false, url);
+  }
+});
+
 test("restores only a fresh generation-scoped pending draft adoption", () => {
   const storage = createMemoryStorage();
   const blank = parseChatRoute(

@@ -351,6 +351,53 @@ test("preserves GPT-6 Pro and rewrites its observed Standard request shape", () 
   });
 });
 
+test("adds Extended when an allowlisted Pro request omits thinking_effort", () => {
+  for (const model of ["gpt-5-6-pro", "gpt-6-pro"]) {
+    const originalBody = makeBody({ model, client_prepare_state: "success" });
+    delete originalBody.thinking_effort;
+    const result = prepareExtendedContinuation(makePause({ body: originalBody }));
+    const mutatedBody = JSON.parse(
+      Buffer.from(result.postDataBase64, "base64").toString("utf8")
+    );
+
+    assert.equal(Object.hasOwn(originalBody, "thinking_effort"), false);
+    assert.deepEqual(mutatedBody, {
+      ...originalBody,
+      thinking_effort: "extended",
+      client_prepare_state: "none"
+    });
+    assert.deepEqual(result.audit.original, {
+      model,
+      thinking_effort: null,
+      client_prepare_state: "success"
+    });
+    assert.equal(result.audit.forced.thinking_effort, "extended");
+    assert.equal(result.audit.submittedUserMessageId, "fresh-user-id");
+  }
+
+  for (const model of ["gpt-5-6-sol", "gpt-6-astra", "gpt-7-pro"]) {
+    const body = makeBody({ model });
+    delete body.thinking_effort;
+    assert.throws(
+      () => prepareExtendedContinuation(makePause({ body })),
+      (error) => error instanceof RequestValidationError && error.code === "model_mismatch"
+    );
+  }
+});
+
+test("rejects an explicitly non-string thinking_effort on supported Pro models", () => {
+  for (const model of ["gpt-5-6-pro", "gpt-6-pro"]) {
+    for (const thinking_effort of [null, false, 0, [], {}]) {
+      assert.throws(
+        () => prepareExtendedContinuation(makePause({
+          body: makeBody({ model, thinking_effort })
+        })),
+        (error) => error instanceof RequestValidationError && error.code === "invalid_thinking_effort"
+      );
+    }
+  }
+});
+
 test("rejects non-Pro and unknown model slugs", () => {
   for (const model of [
     "gpt-5-6-sol",
@@ -374,7 +421,7 @@ test("rejects non-Pro and unknown model slugs", () => {
   }
 });
 
-test("requires model, thinking_effort, and client_prepare_state as own strings", () => {
+test("requires model and client_prepare_state as own strings", () => {
   const inherited = Object.create({
     thinking_effort: "standard",
     client_prepare_state: "ready"
@@ -402,7 +449,7 @@ test("requires model, thinking_effort, and client_prepare_state as own strings",
     (error) =>
       error instanceof RequestValidationError &&
       error.code ===
-        "missing_thinking_effort"
+        "missing_client_prepare_state"
   );
 
   const invalidType = makeBody({

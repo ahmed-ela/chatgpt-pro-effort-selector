@@ -12,7 +12,7 @@ export class PhaseTransitionError extends Error {
 const CHATGPT_ORIGIN =
   "https://chatgpt.com";
 const TEMPORARY_CONVERSATION_PATH_RE =
-  /^\/c\/WEB:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  /^\/c\/(?:WEB:|local-chatgpt(?::|%3[Aa]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CANONICAL_CONVERSATION_PATH_RE =
   /^\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BLANK_DRAFT_PATHS =

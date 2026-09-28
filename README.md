@@ -10,6 +10,7 @@
 - [Validate](#validate)
 - [Technical documentation](#technical-documentation)
 - [Known limitations](#known-limitations)
+- [For curious readers](#for-curious-readers)
 - [License](#license)
 
 ## Why it exists
@@ -149,6 +150,56 @@ The archive is written to `dist/` with `manifest.json` at its root.
 - ChatGPT or Chrome changes can break it.
 - Shadow DOM isolates the selector's internal styling, but not model detection, mount-point discovery, or request schemas.
 - The extension intentionally blocks Extended or reports an uncertain outcome when required structure no longer matches.
+
+## For curious readers
+
+<details>
+<summary>Why did ChatGPT change its temporary conversation IDs?</summary>
+
+**My best read: they’re reorganizing how ChatGPT manages conversations as application state.** That fits their broader move toward an app for ongoing work, but the URL change alone is a small signal.
+
+I checked the current browser code. It creates a `local-chatgpt:<uuid>` identifier immediately, then maps it to the permanent server conversation ID when the chat is saved. It also explicitly treats the old `WEB:` URLs as obsolete. So this is a deliberate change to conversation identity handling. [Current conversation-state code](https://chatgpt.com/cdn/assets/184143.2270b2c39e.js)
+
+| Before | Now |
+|---|---|
+| `WEB:<uuid>` emphasized where the temporary ID originated: the web client. | `local-chatgpt:<uuid>` explicitly identifies a local ChatGPT conversation. |
+| The interface already had a temporary chat before receiving its permanent server ID. | The current code maintains explicit mappings between temporary and permanent identities. |
+| Suggests a convention named around the browser. | Suggests a clearer convention that could be reused across different app surfaces. |
+
+The important qualification: **the old design already supported creating the chat locally before the server finished.** We cannot infer that this capability is new, or that the old implementation lacked similar mappings.
+
+Why would engineers do this? Likely reasons include making unsaved versus saved conversations harder to confuse, simplifying retries and navigation, or consolidating code used by several interfaces. A clearer identifier helps the app track “the conversation you already see” while its backend creation is still underway.
+
+The broader direction has stronger evidence elsewhere: OpenAI publicly describes bringing Chat, Work, and Codex together, supporting work across devices, and handling longer tasks involving files, tools, and scheduled activity. That makes reliable conversation and task state increasingly central to the product. [OpenAI’s announcement](https://openai.com/index/chatgpt-for-your-most-ambitious-work/)
+
+**My interpretation is that a conversation is becoming the container for an ongoing piece of work.** This naming change is consistent with that infrastructure becoming more general and shared. The alternative explanation—an ordinary cleanup during a frontend refactor—is also entirely plausible.
+
+It gives us no evidence of on-device model inference, offline operation, or an intentional restriction on Extended. Our extension depended on an internal naming convention that changed.
+
+Additional implementation reference: [legacy `WEB:` route handling](https://chatgpt.com/cdn/assets/16147.36a0f51980.js).
+
+</details>
+
+<details>
+<summary>Does Extended still work when ChatGPT omits thinking_effort?</summary>
+
+**Yes, in a controlled live test on September 28, 2026.** The normal GPT-6 Pro request we observed omitted `thinking_effort` entirely. The backend still accepted a corrected request that explicitly included:
+
+~~~json
+{
+  "thinking_effort": "extended"
+}
+~~~
+
+The test preserved `model: "gpt-6-pro"` and used the extension's existing unprepared request path, `client_prepare_state: "none"`. It returned `OK`, and the saved assistant response had `status: "finished_successfully"`, `model_slug: "gpt-6-pro"`, and `thinking_effort: "extended"` in the server data.
+
+The old extension required `thinking_effort` to already exist as a string, so it aborted the new request shape before sending it. Version 1.0.17 adds the field when it is absent on a supported Pro request. It still rejects explicitly present non-string values, including `null`, and keeps the existing model and request validation.
+
+Omitting the field from the normal frontend request therefore did not mean the backend had stopped accepting Extended. This is an observation of unsupported ChatGPT internals on that date; it does not establish why OpenAI changed the frontend or guarantee future support.
+
+Verification scope: the corrected backend request succeeded through a controlled diagnostic interception, and all 89 automated checks passed. A live end-to-end check of the reloaded 1.0.17 extension was still pending at the time of this note.
+
+</details>
 
 ## License
 

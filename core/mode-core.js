@@ -20,7 +20,7 @@
   const CONVERSATION_PATH_RE =
     /^\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
   const TEMPORARY_CONVERSATION_PATH_RE =
-    /^\/c\/WEB:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+    /^\/c\/(?:WEB:|local-chatgpt(?::|%3[Aa]))([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
   const BLANK_DRAFT_PATHS =
     new Set(["/", "/new"]);
   const GENERATION_ID_RE =
@@ -686,13 +686,14 @@
       return createDraftRoute();
     }
 
+    if (parsedUrl.origin !== CHATGPT_ORIGIN) {
+      return createDraftRoute();
+    }
+
     const pathname = parsedUrl.pathname;
-    const match =
-      parsedUrl.origin === CHATGPT_ORIGIN
-        ? pathname.match(
-            CONVERSATION_PATH_RE
-          )
-        : null;
+    const match = pathname.match(
+      CONVERSATION_PATH_RE
+    );
 
     if (!match) {
       return createDraftRoute(pathname);

@@ -140,6 +140,10 @@ Run this five-send sequence in one canonical chat, using a unique marker for eve
 12. In a controlled harness, or manually when the timing is reproducible, submit a Standard first message and select Extended before ChatGPT assigns the canonical route.
 13. Confirm that first marked request remained backend Standard, reload and confirm the created chat is Extended, then send a second marker and confirm backend Extended.
 
+Repeat the provisional-route lifecycle checks for `/c/local-chatgpt%3A<lowercase UUID>`, `/c/local-chatgpt%3a<lowercase UUID>`, `/c/local-chatgpt:<lowercase UUID>`, and the legacy `/c/WEB:<lowercase UUID>` route. The provisional path must preserve Extended until the correlated canonical conversation is assigned. A malformed UUID, an extra path segment, a different origin, an unrelated draft, or a full-document navigation must still cancel the active operation.
+
+For a supported Pro request that omits `thinking_effort`, confirm the extension adds `"extended"` and the backend records Extended on the completed response. The redacted original audit should record `null` for the absent field. An explicitly present non-string value, including `null`, must still be rejected.
+
 ## Legacy migration QA
 
 1. Before loading the revised extension, create the old local-storage value `effortPreference = "extended"`.

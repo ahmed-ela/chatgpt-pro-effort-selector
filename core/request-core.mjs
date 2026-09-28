@@ -283,7 +283,9 @@ export function prepareExtendedContinuation(pausedEvent) {
   );
 
   requireOwnString(parsedBody, "model");
-  requireOwnString(parsedBody, "thinking_effort");
+  if (hasOwn(parsedBody, "thinking_effort")) {
+    requireOwnString(parsedBody, "thinking_effort");
+  }
   requireOwnString(parsedBody, "client_prepare_state");
 
   if (!SUPPORTED_PRO_MODEL_SLUGS.has(parsedBody.model)) {
@@ -298,7 +300,10 @@ export function prepareExtendedContinuation(pausedEvent) {
 
   const originalValues = {
     model: parsedBody.model,
-    thinking_effort: parsedBody.thinking_effort,
+    // A missing effort is distinct from an explicit Standard request.
+    thinking_effort: hasOwn(parsedBody, "thinking_effort")
+      ? parsedBody.thinking_effort
+      : null,
     client_prepare_state: parsedBody.client_prepare_state
   };
 
