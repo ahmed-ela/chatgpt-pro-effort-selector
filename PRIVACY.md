@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Effective date: August 9, 2026
+Effective date: October 4, 2026
 
 ChatGPT Pro Effort Selector is an unofficial, locally running Chrome extension. It is not affiliated with, endorsed by, or published by OpenAI. The extension requires the user to have their own ChatGPT Pro access; it does not provide a subscription or bypass access controls.
 
@@ -36,7 +36,7 @@ The extension retains only the following operational data:
 
 - **Persistent extension storage:** for each canonical saved conversation, the ChatGPT conversation UUID is used in a storage key whose value is `standard` or `extended`. This remains until it is changed, the extension's data is cleared, or the extension is removed.
 - **Tab page-session storage:** an unsaved draft's selected mode and bounded temporary-to-canonical conversation bindings. To distinguish a newly created chat from an existing one, the content script reads conversation links already present in ChatGPT's page and transiently extracts only canonical conversation UUID storage keys. A reload-recovery record is created only when there are no more than 512 such keys; it may contain those keys, a generated operation ID, selected mode, ChatGPT route identifiers, and a timestamp. This record is stored in `chatgpt.com`'s page `sessionStorage`, is never conversation content, and is never accepted after two minutes. It is cleared when correlation finishes or fails, on an expired read, by a scheduled expiry callback when the page is running, or when the tab's page session ends.
-- **Browser-session extension storage:** redacted one-shot state such as tab and document identifiers, a generated operation ID, lifecycle phase, ChatGPT pathname, timestamp, whether the request was continued, whether normal-UI replay was authorized and started, paused-request identifiers needed for safe recovery, HTTP method and resource type, the original and forced values of the three fields listed above, removed header names but never their values, the submitted user-message identifier, and status or error codes. This storage is browser-session-only.
+- **Browser-session extension storage:** redacted one-shot state such as tab and document identifiers, a generated operation ID, lifecycle phase, ChatGPT pathname, timestamp, whether the request was continued, whether normal-UI replay was authorized and started, paused-request identifiers needed for safe recovery, HTTP method and resource type, the original and forced values of the three fields listed above, removed header names but never their values, the submitted user-message identifier, and status or error codes. Failure diagnostics retain only known trigger codes, observation timestamps, lifecycle flags, a bounded paused-request count, abort result, and a known Chrome detach-reason code. They do not retain arbitrary Chrome error text. This storage is browser-session-only.
 
 The extension does not retain prompt text, full request bodies, ChatGPT response text, cookies, authorization values, or any other header values. The in-memory paused request object and the prepared continuation are released as soon as they have been processed, before debugger-cleanup retries.
 

@@ -199,6 +199,10 @@ Omitting the field from the normal frontend request therefore did not mean the b
 
 Verification scope: the corrected backend request succeeded through a controlled diagnostic interception, and all 89 automated checks passed. A live end-to-end check of the reloaded 1.0.17 extension was still pending at the time of this note.
 
+## Uncertain-send diagnostics (1.0.18)
+
+Uncertain sends now explain the observed trigger, such as a capture timeout or navigation, instead of always claiming Chrome detached or lost state. The session audit retains a sanitized cause, observation time, lifecycle flags, and Chrome detach reason when available. Worker recovery preserves an already recorded cause; legacy records receive neutral wording. The extension still refuses to report an unverified request as a successful Extended send. Check the conversation before retrying to avoid a duplicate.
+
 </details>
 
 ## License

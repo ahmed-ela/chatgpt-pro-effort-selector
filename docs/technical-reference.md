@@ -292,6 +292,9 @@ The latest operation for each tab uses only this redacted audit shape:
 - generation id
 - status
 - error code
+- a bounded diagnostic with the observed trigger, observation timestamp, lifecycle phase, replay authorization/start and continuation flags, paused-request count (capped at eight), abort result, and Chrome's known detach-reason enum when available
+
+Version 1.0.18 keeps the confidence classification (`outcome_uncertain`) separate from the trigger. The warning identifies timeout, navigation, unexpected detach, or recovered state when known; older records without diagnostics use neutral wording. Recorded triggers and their timestamps survive worker recovery. A newly created recovery timestamp describes when recovery was observed, not when an unknown historical failure occurred. Chrome's `canceled_by_user` reason does not identify who initiated the detach. Expected cleanup detachment does not produce a new failure diagnostic.
 
 No request body, prompt, response, cookie, authorization value, or header value is retained.
 

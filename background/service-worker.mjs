@@ -12,6 +12,12 @@ import {
   isPreSendActivePhase,
   transitionPhase
 } from "../core/state-core.mjs";
+import {
+  createDiagnostic,
+  sanitizeDetachReason,
+  sanitizeDiagnostic,
+  uncertainMessage
+} from "../core/diagnostic-core.mjs";
 
 const MESSAGE_SOURCE = "chatgpt-pro-effort-selector";
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
@@ -297,7 +303,8 @@ function sanitizeAudit(value) {
     error:
       typeof value.error === "string"
         ? value.error
-        : null
+        : null,
+    diagnostic: sanitizeDiagnostic(value.diagnostic)
   };
 }
 
@@ -338,6 +345,7 @@ function sanitizeActiveRecord(value) {
       value.replayAuthorized === true,
     uiReplayStarted:
       value.uiReplayStarted === true,
+    diagnostic: sanitizeDiagnostic(value.diagnostic),
     pausedRequestIds:
       Array.isArray(value.pausedRequestIds)
         ? value.pausedRequestIds
@@ -492,7 +500,8 @@ function createMinimalAudit(session, status, error) {
     submittedUserMessageId:
       session.audit?.submittedUserMessageId ?? null,
     status,
-    error
+    error,
+    diagnostic: sanitizeDiagnostic(session.diagnostic)
   };
 }
 
@@ -519,6 +528,7 @@ function recordActiveSession(session) {
       session.replayAuthorized === true,
     uiReplayStarted:
       session.uiReplayStarted === true,
+    diagnostic: sanitizeDiagnostic(session.diagnostic ?? session.audit?.diagnostic),
     pausedRequestIds: [
       ...session.qualifyingRequestIds
     ]
@@ -548,14 +558,9 @@ function clearSessionTimers(session) {
   session.pendingNavigationUrl = null;
 }
 
-function statusMessageFor(code, status) {
+function statusMessageFor(code, status, diagnostic = null) {
   if (status === "uncertain") {
-    return (
-      "Chrome detached or lost one-shot state after the normal UI action " +
-      "had begun. The extension cannot honestly prove whether Chrome " +
-      "released an untouched request. Treat the result as blocked or " +
-      "uncertain; do not rely on it as proof of Extended."
-    );
+    return uncertainMessage(diagnostic);
   }
 
   if (status === "sent_warning") {
@@ -642,8 +647,10 @@ function publicStateFromAudit(audit) {
       label: "Sent as Extended; warning",
       message: statusMessageFor(
         audit.error,
-        audit.status
+        audit.status,
+        audit.diagnostic
       ),
+      diagnostic: sanitizeDiagnostic(audit.diagnostic),
       submittedUserMessageId:
         audit.submittedUserMessageId
     };
@@ -655,8 +662,10 @@ function publicStateFromAudit(audit) {
       label: "Extended outcome uncertain",
       message: statusMessageFor(
         audit.error,
-        audit.status
+        audit.status,
+        audit.diagnostic
       ),
+      diagnostic: sanitizeDiagnostic(audit.diagnostic),
       submittedUserMessageId:
         audit.submittedUserMessageId
     };
@@ -669,6 +678,7 @@ function publicStateFromAudit(audit) {
       audit.error,
       "failed"
     ),
+    diagnostic: sanitizeDiagnostic(audit.diagnostic),
     submittedUserMessageId:
       audit.submittedUserMessageId
   };
@@ -782,6 +792,8 @@ function createSession(sender, parsedUrl) {
     attached: false,
     detached: false,
     expectedDetach: false,
+    detachReason: null,
+    diagnostic: null,
     finalizing: false,
     requestContinued: false,
     replayAuthorized: false,
@@ -1157,6 +1169,7 @@ async function finalizeFailedSession(
     return;
   }
 
+  const priorUncertain = session.audit?.status === "uncertain";
   session.finalizing = true;
   session.candidateEvent = null;
   clearSessionTimers(session);
@@ -1169,6 +1182,10 @@ async function finalizeFailedSession(
       additionalRequestId
     );
   }
+
+  // Capture the trigger and lifecycle before finalization changes the phase.
+  // Persist it before cleanup awaits so recovery can retain the real cause.
+  session.diagnostic ??= session.audit?.diagnostic ?? createDiagnostic(session, code);
 
   if (isPreSendActivePhase(session.phase)) {
     try {
@@ -1197,6 +1214,11 @@ async function finalizeFailedSession(
     }
   }
 
+  if (!priorUncertain) {
+    session.diagnostic.abortSucceeded = session.qualifyingRequestIds.size > 0
+      ? allAbortsSucceeded : null;
+  }
+
   const patternsCleared =
     session.attached && !session.detached
       ? await tryClearPatterns(session.target)
@@ -1217,8 +1239,8 @@ async function finalizeFailedSession(
       code === "replay_cancelled"
   });
 
-  let status = classification.status;
-  let error = classification.error;
+  let status = priorUncertain ? "uncertain" : classification.status;
+  let error = priorUncertain ? "outcome_uncertain" : classification.error;
   if (
     status === "failed" ||
     status === "sent_warning"
@@ -1230,7 +1252,7 @@ async function finalizeFailedSession(
    * External detachment itself releases Fetch interception. A cleanup
    * warning is needed only when the debugger did not actually detach.
    */
-  if (session.requestContinued && !detachComplete) {
+  if (session.requestContinued && !detachComplete && status !== "uncertain") {
     status = "sent_warning";
     error = "cleanup_failed";
   }
@@ -1317,6 +1339,7 @@ async function completeSentSession(session) {
   if (!hasPostSendProblem) {
     session.audit.status = "sent_warning";
     session.audit.error = "cleanup_failed";
+    session.audit.diagnostic ??= createDiagnostic(session, "cleanup_failed");
   }
 
   session.cleanupAttempts += 1;
@@ -1395,6 +1418,7 @@ async function retrySentCleanup(session) {
     if (!hasPostSendProblem) {
       session.audit.status = "sent_warning";
       session.audit.error = "cleanup_failed";
+      session.audit.diagnostic ??= createDiagnostic(session, "cleanup_failed");
     }
 
     session.phase = "sent_warning";
@@ -1408,6 +1432,7 @@ async function retrySentCleanup(session) {
   if (session.audit.status !== "uncertain") {
     session.audit.status = "sent_warning";
     session.audit.error = "cleanup_failed";
+    session.audit.diagnostic ??= createDiagnostic(session, "cleanup_failed");
   }
 
   session.phase = "sent_warning";
@@ -1805,6 +1830,10 @@ async function handleLateDuplicate(
 ) {
   session.qualifyingCount += 1;
   session.qualifyingRequestIds.add(requestId);
+  const duplicateDiagnostic = createDiagnostic(session, "duplicate_qualifying_request");
+  session.diagnostic = session.audit?.status === "uncertain"
+    ? session.audit.diagnostic ?? duplicateDiagnostic
+    : duplicateDiagnostic;
   recordActiveSession(session);
   await persistRequired();
 
@@ -1827,6 +1856,7 @@ async function handleLateDuplicate(
       session.target,
       requestId
     );
+  duplicateDiagnostic.abortSucceeded = duplicateAborted;
 
   if (!session.audit) {
     session.audit = createMinimalAudit(
@@ -1836,10 +1866,14 @@ async function handleLateDuplicate(
     );
   }
 
-  if (duplicateAborted) {
+  if (session.audit.status === "uncertain") {
+    // Later cleanup cannot resolve an earlier unconfirmed duplicate.
+    session.audit.diagnostic ??= duplicateDiagnostic;
+  } else if (duplicateAborted) {
     session.audit.status = "sent_warning";
     session.audit.error =
       "duplicate_qualifying_request";
+    session.audit.diagnostic = duplicateDiagnostic;
   } else {
     /*
      * The original request is known to have been sent Extended, but Chrome
@@ -1848,9 +1882,14 @@ async function handleLateDuplicate(
      */
     session.audit.status = "uncertain";
     session.audit.error = "outcome_uncertain";
+    session.audit.diagnostic = duplicateDiagnostic;
   }
 
+  session.diagnostic = session.audit.diagnostic;
   setAudit(session.tabId, session.audit);
+  if (activeSessions.get(session.tabId) === session) {
+    recordActiveSession(session);
+  }
   await persistRequired();
 
   /*
@@ -2130,6 +2169,7 @@ async function handleOrphanPause(
   source,
   pausedEvent
 ) {
+  const observedAt = Date.now();
   const target = { tabId: source.tabId };
   const requestId =
     typeof pausedEvent?.requestId === "string"
@@ -2165,6 +2205,22 @@ async function handleOrphanPause(
 
   const previousAudit =
     runtimeState.audits[String(source.tabId)];
+  const priorContinuation = previousAudit?.status === "sent"
+    || previousAudit?.status === "sent_warning"
+    || previousAudit?.diagnostic?.requestContinued === true;
+  const diagnostic = previousAudit?.status === "uncertain"
+    && previousAudit.diagnostic
+    ? previousAudit.diagnostic
+    : {
+        ...createDiagnostic({
+          requestContinued: priorContinuation,
+          pausedRequestIds: qualifying && requestId ? [requestId] : []
+        }, qualifying && priorContinuation
+          ? "duplicate_qualifying_request" : "orphan_pause", {
+          abortSucceeded: qualifying ? qualifyingAbortSucceeded : null
+        }),
+        observedAt
+      };
 
   let audit;
 
@@ -2217,6 +2273,11 @@ async function handleOrphanPause(
     };
   }
 
+  if (previousAudit?.status === "uncertain") {
+    audit.status = "uncertain";
+    audit.error = "outcome_uncertain";
+  }
+  audit.diagnostic = diagnostic;
   setAudit(source.tabId, audit);
   deleteActiveRecord(source.tabId);
   await persistRequired();
@@ -2228,6 +2289,7 @@ async function handleOrphanPause(
 }
 
 async function reconcileStaleActiveRecord(record) {
+  const recoveryDiagnostic = createDiagnostic(record, "worker_state_lost");
   const target = { tabId: record.tabId };
   let allAbortsSucceeded = true;
 
@@ -2247,9 +2309,25 @@ async function reconcileStaleActiveRecord(record) {
 
   const previousAudit =
     runtimeState.audits[String(record.tabId)];
+  // A recovery observation cannot identify the original trigger unless it
+  // was durably recorded. Never replace a recorded trigger with a guess.
+  recoveryDiagnostic.abortSucceeded = record.pausedRequestIds.length > 0
+    ? allAbortsSucceeded : null;
+  const diagnostic = record.diagnostic
+    ?? (previousAudit?.generationId === record.generationId
+      ? previousAudit.diagnostic : null)
+    ?? recoveryDiagnostic;
+
+  // A known first continuation does not settle the outcome of a later
+  // duplicate if its abort was unconfirmed when the worker disappeared.
+  const unconfirmedDuplicate = diagnostic.cause === "duplicate_qualifying_request"
+    && record.requestContinued
+    && (diagnostic.abortSucceeded === false
+      || (diagnostic.abortSucceeded !== true
+        && (!allAbortsSucceeded || record.pausedRequestIds.length === 0)));
 
   const classification =
-    previousAudit?.status === "uncertain"
+    previousAudit?.status === "uncertain" || unconfirmedDuplicate
       ? {
           status: "uncertain",
           error: "outcome_uncertain"
@@ -2276,7 +2354,8 @@ async function reconcileStaleActiveRecord(record) {
     submittedUserMessageId:
       previousAudit?.submittedUserMessageId ?? null,
     status: classification.status,
-    error: classification.error
+    error: classification.error,
+    diagnostic
   };
 
   setAudit(record.tabId, audit);
@@ -2570,7 +2649,7 @@ chrome.debugger.onEvent.addListener(
 );
 
 chrome.debugger.onDetach.addListener(
-  (source) => {
+  (source, reason) => {
     if (!Number.isInteger(source.tabId)) {
       return;
     }
@@ -2588,6 +2667,8 @@ chrome.debugger.onDetach.addListener(
       if (session.expectedDetach) {
         return;
       }
+
+      session.detachReason = sanitizeDetachReason(reason);
 
       await finalizeFailedSession(
         session,
