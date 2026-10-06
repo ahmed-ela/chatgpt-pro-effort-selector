@@ -168,9 +168,22 @@ For a supported Pro request that omits `thinking_effort`, confirm the extension 
 
 1. Select Extended.
 2. Trigger a send in a state where ChatGPT does not produce the exact conversation POST.
-3. Wait approximately 10 seconds.
+3. Wait approximately sixty seconds after replay authorization. A separate ten-second deadline applies while waiting for the authorization handshake to finish.
 4. Confirm the operation reports **Extended outcome uncertain** after replay authorization, or a definite blocker if replay was explicitly cancelled before dispatch.
 5. Confirm it never reports a clean Extended success.
+6. In the isolated worker harness, delay confirmation/replay storage acknowledgements across their deadline, navigation, and detach. Confirm every retired authorization returns failure and no request is continued.
+7. Delay a valid request beyond the old ten-second cutoff but within the new capture window. Confirm exactly one Extended continuation; replaying an old arm callback must not retire the current operation.
+8. Delay delivery of a replay acknowledgement past its absolute deadline. Confirm the content script performs no native click and does not retry automatically.
+
+## Composer readiness during Extended arming
+
+1. In a fresh Pro chat, select Extended and send a unique marker through Send. Repeat in another fresh chat with Enter.
+2. Confirm exactly one submission and verify the completed assistant's backend `model_slug` and `thinking_effort`; a continued request alone is insufficient.
+3. In the isolated content-script harness, replace the composer or temporarily disable Send during both authorization acknowledgements. Keep the same draft and model and restore valid controls within the shared 1.5-second budget; confirm exactly one click.
+4. Keep controls unavailable beyond that budget, or change the draft, paragraph boundaries, model, effort, or route. Confirm no click, no form-submit fallback, and a specific blocker.
+5. Replace Send with Stop, including text-only and `aria-disabled` cases. Confirm it is never clicked.
+6. Delay an old cancellation until a newer operation starts. Confirm old cleanup cannot overwrite the newer operation.
+7. Confirm an expired absolute replay deadline blocks even if the controls are ready, and no failed or uncertain send is retried automatically.
 
 ## Model mismatch
 

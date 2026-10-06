@@ -40,11 +40,14 @@ async function createFixture(t, { stored, attachError = false, failCommand = () 
   const originalChrome = globalThis.chrome;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
+  const originalNow = Date.now;
+  let now = originalNow();
+  Date.now = () => now;
   const timers = new Map();
   let timerId = 0;
   globalThis.setTimeout = (callback, milliseconds) => {
     const id = ++timerId;
-    timers.set(id, { callback, milliseconds });
+    timers.set(id, { callback, milliseconds, deadlineAt: now + milliseconds });
     return id;
   };
   globalThis.clearTimeout = (id) => timers.delete(id);
@@ -52,6 +55,7 @@ async function createFixture(t, { stored, attachError = false, failCommand = () 
     globalThis.chrome = originalChrome;
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
+    Date.now = originalNow;
     timers.clear();
   });
 
@@ -61,7 +65,8 @@ async function createFixture(t, { stored, attachError = false, failCommand = () 
   };
   const values = stored ? { [STORAGE_KEY]: structuredClone(stored) } : {};
   const calls = { attach: [], detach: [], commands: [], writes: [], notifications: [] };
-  const behavior = { failCommand, failDetach: false, holdCleanup: false, heldCleanup: null, holdAbort: false, heldAbort: null };
+  const behavior = { failCommand, failDetach: false, holdCleanup: false, heldCleanup: null, holdAbort: false, heldAbort: null,
+    holdNextStorage: false, heldStorage: null };
   const chrome = {
     runtime: { lastError: null, onMessage: events.message },
     debugger: {
@@ -107,6 +112,11 @@ async function createFixture(t, { stored, attachError = false, failCommand = () 
       set(update, callback) {
         Object.assign(values, structuredClone(update));
         calls.writes.push(structuredClone(update));
+        if (behavior.holdNextStorage) {
+          behavior.holdNextStorage = false;
+          behavior.heldStorage = callback;
+          return;
+        }
         callback();
       }
     } },
@@ -134,6 +144,13 @@ async function createFixture(t, { stored, attachError = false, failCommand = () 
   await send("getState"); // Wait for initialization/recovery before assertions.
   return {
     calls, events, values, behavior, send, timers,
+    advance(milliseconds) { now += milliseconds; },
+    releaseStorage() {
+      assert.equal(typeof behavior.heldStorage, "function");
+      const callback = behavior.heldStorage;
+      behavior.heldStorage = null;
+      callback();
+    },
     releaseCleanup(failed = false) {
       assert.equal(typeof behavior.heldCleanup, "function");
       const callback = behavior.heldCleanup;
@@ -168,6 +185,7 @@ async function createFixture(t, { stored, attachError = false, failCommand = () 
       await waitFor(() => [...timers.values()].some((timer) => timer.milliseconds === milliseconds), `timer ${milliseconds}`);
       const [id, timer] = [...timers].find(([, timer]) => timer.milliseconds === milliseconds);
       timers.delete(id);
+      now = Math.max(now, timer.deadlineAt);
       timer.callback();
       await nextTurn();
     },
@@ -263,17 +281,166 @@ for (const replay of [false, true]) {
   });
 }
 
+test("a late replay acknowledgement receives the full capture window and sends once", async (t) => {
+  const fixture = await createFixture(t);
+  const arm = await fixture.arm({ authorize: false, replay: false });
+  const oldWatchdog = [...fixture.timers.values()].find(timer => timer.milliseconds === 10_000);
+  assert.ok(oldWatchdog, "the unreplayed arm must have a bounded watchdog");
+  fixture.advance(9_000);
+  assert.equal((await fixture.send("confirmArmed", { generationId: arm.generationId })).ok, true);
+  const replay = await fixture.send("markReplayStarting", { generationId: arm.generationId });
+  assert.equal(replay.ok, true);
+  const expectedDeadline = Date.now() + 60_000;
+
+  fixture.advance(2_000);
+  // A canceled timer can already be queued on the event loop. Calling it here
+  // must not retire the now-replayed generation or consume its capture budget.
+  oldWatchdog.callback();
+  await nextTurn();
+  assert.equal((await fixture.send("getState")).activeOperation, true);
+  assert.equal(replay.replayDeadlineAt, expectedDeadline);
+  assert.ok([...fixture.timers.values()].some(timer => timer.deadlineAt === replay.replayDeadlineAt));
+  assert.equal(fixture.calls.detach.length, 0);
+  fixture.pause("request-after-original-ten-seconds");
+  await fixture.fireTimer(75);
+  const state = await fixture.finished();
+  assert.equal(state.phase, "sent");
+  assert.equal(fixture.audit().status, "sent");
+  const sends = fixture.calls.commands.filter(({ method }) => method === "Fetch.continueRequest");
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].parameters.requestId, "request-after-original-ten-seconds");
+});
+
+for (const messageType of ["confirmArmed", "markReplayStarting"]) {
+  for (const fireWatchdog of [false, true]) {
+    test(`${messageType} rejects a persisted acknowledgement after arm expiry with timer fired=${fireWatchdog}`, async (t) => {
+      const fixture = await createFixture(t);
+      const arm = await fixture.arm({ authorize: messageType === "markReplayStarting", replay: false });
+      fixture.behavior.holdNextStorage = true;
+      const pending = fixture.send(messageType, { generationId: arm.generationId });
+      await waitFor(() => fixture.behavior.heldStorage !== null, "held authorization storage acknowledgement");
+      if (fireWatchdog) await fixture.fireTimer(10_000);
+      else fixture.advance(10_001); // A delayed timer cannot grant expired replay.
+      fixture.releaseStorage();
+      const reply = await pending;
+      // Quiesce the old buggy implementation too so red test results report
+      // the stale acknowledgement, without unrelated teardown rejections.
+      if (!fireWatchdog && reply.ok) await fixture.fireTimer(10_000);
+      const state = await fixture.finished();
+      assert.equal(reply.ok, false, "retired or expired authorization must never reach the native Send action");
+      assert.equal(state.activeOperation, false);
+      assert.equal(state.diagnostic.cause, "arm_timeout");
+      assert.equal(fixture.calls.commands.filter(({ method }) => method === "Fetch.continueRequest").length, 0);
+      assertNoPrivateData(fixture, state);
+    });
+  }
+}
+
+for (const loss of ["navigation", "debugger_detached"]) {
+  test(`markReplayStarting rejects an acknowledgement retired by ${loss}`, async (t) => {
+    const fixture = await createFixture(t);
+    const arm = await fixture.arm({ replay: false });
+    fixture.behavior.holdNextStorage = true;
+    const pending = fixture.send("markReplayStarting", { generationId: arm.generationId });
+    await waitFor(() => fixture.behavior.heldStorage !== null, "held replay storage acknowledgement");
+    if (loss === "navigation") {
+      fixture.events.committed.emit({ tabId: TAB_ID, frameId: 0, documentId: "replacement-document", url: TAB_URL });
+    } else {
+      fixture.events.detach.emit({ tabId: TAB_ID }, "target_closed");
+    }
+    await nextTurn();
+    fixture.releaseStorage();
+    const reply = await pending;
+    const state = await fixture.finished();
+    assert.equal(reply.ok, false);
+    assert.equal(state.activeOperation, false);
+    assert.equal(state.diagnostic.cause, loss);
+    assert.equal(fixture.calls.commands.filter(({ method }) => method === "Fetch.continueRequest").length, 0);
+  });
+}
+
+test("repeated replay markers cannot extend the capture deadline", async (t) => {
+  const fixture = await createFixture(t);
+  const arm = await fixture.arm({ replay: false });
+  const replay = await fixture.send("markReplayStarting", { generationId: arm.generationId });
+  assert.equal(replay.ok, true);
+  assert.equal(replay.replayDeadlineAt, Date.now() + 60_000);
+  fixture.advance(5_000);
+  assert.equal((await fixture.send("markReplayStarting", { generationId: arm.generationId })).ok, false);
+  assert.equal([...fixture.timers.values()].find(timer => timer.milliseconds === 60_000)?.deadlineAt, replay.replayDeadlineAt);
+  await fixture.fireTimer(60_000);
+  const state = await fixture.finished();
+  assertUncertain(fixture, state, "timeout", /qualifying.*request|deadline|expired/i);
+  assert.equal(fixture.calls.commands.filter(({ method }) => method === "Fetch.continueRequest").length, 0);
+});
+
+test("a request arriving after the capture deadline is aborted before a delayed timer fires", async (t) => {
+  const fixture = await createFixture(t);
+  await fixture.arm();
+  fixture.advance(60_001);
+  fixture.pause("request-after-capture-expiry");
+  await nextTurn();
+  if ([...fixture.timers.values()].some(timer => timer.milliseconds === 75)) {
+    // The prior implementation accepted this late candidate. Let that path
+    // finish so the assertion exposes its continuation after expiry directly.
+    await fixture.fireTimer(75);
+  }
+  const state = await fixture.finished();
+  assert.equal(state.activeOperation, false);
+  assert.equal(fixture.calls.commands.filter(({ method }) => method === "Fetch.continueRequest").length, 0);
+  assert.equal(state.diagnostic.cause, "timeout");
+  assert.equal(fixture.calls.commands.filter(({ method, parameters }) =>
+    method === "Fetch.failRequest" && parameters.requestId === "request-after-capture-expiry").length, 1);
+});
+
+test("a native request delayed beyond ten seconds is captured exactly once", async (t) => {
+  const fixture = await createFixture(t);
+  await fixture.arm();
+  fixture.advance(20_000);
+  fixture.pause("delayed-native-request");
+  await fixture.fireTimer(75);
+  const state = await fixture.finished();
+  assert.equal(state.phase, "sent");
+  const continuations = fixture.calls.commands.filter(({ method }) => method === "Fetch.continueRequest");
+  assert.equal(continuations.length, 1);
+  assert.equal(continuations[0].parameters.requestId, "delayed-native-request");
+  const body = JSON.parse(Buffer.from(continuations[0].parameters.postData, "base64").toString("utf8"));
+  assert.equal(body.model, "gpt-6-pro");
+  assert.equal(body.thinking_effort, "extended");
+});
+
+test("stale capture callbacks cannot cancel an accepted candidate or replace its successful audit", async (t) => {
+  const fixture = await createFixture(t);
+  await fixture.arm();
+  const capture = [...fixture.timers.values()].find(timer => timer.milliseconds === 60_000);
+  assert.ok(capture);
+  fixture.pause("candidate-before-stale-callback");
+  await nextTurn();
+  capture.callback();
+  await fixture.fireTimer(75);
+  const state = await fixture.finished();
+  assert.equal(state.phase, "sent");
+  const audit = structuredClone(fixture.audit());
+  const detachCount = fixture.calls.detach.length;
+  capture.callback();
+  await nextTurn();
+  assert.deepEqual(fixture.audit(), audit);
+  assert.equal(fixture.calls.detach.length, detachCount);
+  assert.equal(fixture.calls.commands.filter(({ method }) => method === "Fetch.continueRequest").length, 1);
+});
+
 test("capture timeout reports its deadline rather than asserting an external detach", async (t) => {
   const fixture = await createFixture(t);
   await fixture.arm();
   const started = Date.now();
-  await fixture.fireTimer(10_000);
+  await fixture.fireTimer(60_000);
   const state = await fixture.finished();
-  assertUncertain(fixture, state, "timeout", /tim(?:e|ed).*out|deadline|10.seconds|qualifying.*request/i, {
+  assertUncertain(fixture, state, "timeout", /tim(?:e|ed).*out|deadline|qualifying.*request/i, {
     phase: "armed", detachReason: null, replayAuthorized: true, uiReplayStarted: true
   });
   assert.ok(state.diagnostic.observedAt >= started && state.diagnostic.observedAt <= Date.now());
   assert.doesNotMatch(state.message, /Chrome detached|worker.*(?:lost|restart)/i);
+  assert.doesNotMatch(state.message, /10.second/i);
   assert.ok(fixture.calls.writes.some((write) => write[STORAGE_KEY].active[String(TAB_ID)]?.diagnostic?.cause === "timeout"), "persist cause in active recovery record before cleanup");
 });
 
@@ -413,7 +580,7 @@ test("restart from a snapshot captured during timeout cleanup retains its actual
     const fixture = await createFixture(t);
     await fixture.arm();
     fixture.behavior.holdCleanup = true;
-    await fixture.fireTimer(10_000);
+    await fixture.fireTimer(60_000);
     await waitFor(() => fixture.behavior.heldCleanup !== null, "timeout cleanup acknowledgement");
     snapshot = structuredClone(fixture.values[STORAGE_KEY]);
     capturedDiagnostic = snapshot.active[String(TAB_ID)].diagnostic;
@@ -427,7 +594,7 @@ test("restart from a snapshot captured during timeout cleanup retains its actual
   await t.test("recovery does not replace the durable timeout with worker loss", async (t) => {
     const fixture = await createFixture(t, { stored: snapshot });
     const state = await fixture.send("getState");
-    assertUncertain(fixture, state, "timeout", /10.seconds|expired|deadline|timed out/i);
+    assertUncertain(fixture, state, "timeout", /qualifying.*request|expired|deadline|timed out/i);
     assert.equal(state.diagnostic.observedAt, capturedDiagnostic.observedAt);
     assert.equal(state.diagnostic.phase, capturedDiagnostic.phase);
   });

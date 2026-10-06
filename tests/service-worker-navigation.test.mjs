@@ -505,10 +505,11 @@ async function verifyExtendedContinuation(model, prepareState, omitEffort = fals
       sender
     );
 
-  assert.deepEqual(replayResult, {
-    generationId: armResult.generationId,
-    ok: true
-  });
+  assert.equal(replayResult.ok, true);
+  assert.equal(replayResult.generationId, armResult.generationId);
+  assert.ok(Number.isSafeInteger(replayResult.replayDeadlineAt));
+  assert.ok(replayResult.replayDeadlineAt > Date.now());
+  assert.ok(replayResult.replayDeadlineAt <= Date.now() + 60_000);
 
   const submittedBody = {
     client_prepare_state: prepareState,
@@ -894,10 +895,11 @@ test("uses the current tab URL when MessageSender.url is stale", async () => {
     generationId: armResult.generationId,
     ok: true
   });
-  assert.deepEqual(replayResult, {
-    generationId: armResult.generationId,
-    ok: true
-  });
+  assert.equal(replayResult.ok, true);
+  assert.equal(replayResult.generationId, armResult.generationId);
+  assert.ok(Number.isSafeInteger(replayResult.replayDeadlineAt));
+  assert.ok(replayResult.replayDeadlineAt > Date.now());
+  assert.ok(replayResult.replayDeadlineAt <= Date.now() + 60_000);
 
   staleUrlMock.events.debuggerEvent.emit(
     { tabId: staleUrlTabId },

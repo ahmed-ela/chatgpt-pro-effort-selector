@@ -1,6 +1,6 @@
 const CAUSES = new Set([
   "state_store_failed", "attach_failed", "enable_failed", "arm_not_current",
-  "replay_cancelled", "timeout", "malformed_event", "malformed_request",
+  "replay_cancelled", "arm_timeout", "timeout", "malformed_event", "malformed_request",
   "model_mismatch", "duplicate_qualifying_request", "debugger_detached",
   "navigation", "tab_closed", "cdp_failure", "worker_state_lost",
   "cleanup_failed", "orphan_pause"
@@ -57,7 +57,8 @@ export function createDiagnostic(state, cause, options = {}) {
 export function uncertainMessage(diagnostic) {
   const detail = sanitizeDiagnostic(diagnostic);
   const causes = {
-    timeout: "The 10-second wait for a qualifying Pro request expired.",
+    arm_timeout: "The send authorization deadline expired before replay was acknowledged.",
+    timeout: "The wait for a qualifying Pro request expired.",
     navigation: "The tab navigated while the request was being monitored.",
     tab_closed: "The ChatGPT tab closed while the request was being monitored.",
     debugger_detached: "Chrome detached the request monitor.",

@@ -124,7 +124,7 @@ The selector is not shown for GPT-5.6 Sol, and a fresh Sol request is never rewr
 
 For every captured normal send-button, Enter, or form submission while that chat remains Extended:
 
-1. The content script captures and stops the original UI event before ChatGPT can process it.
+1. The content script captures and stops the original UI event before ChatGPT can process it, freezing the original composer/draft identity in memory.
 2. The background service worker creates browser-session-only one-shot state.
 3. Immediately before attaching, the service worker re-reads the tab URL, requires the exact `https://chatgpt.com` origin and unchanged pathname, then attaches `chrome.debugger` to that exact tab and waits for Chrome's acknowledgement.
 4. It calls `Fetch.enable` with exactly two request-stage patterns:
@@ -132,13 +132,13 @@ For every captured normal send-button, Enter, or form submission while that chat
    - `https://chatgpt.com/backend-api/f/conversation*`, resource type `Fetch`
 5. The content script performs a final current-tab, current-document, current-path, and current-generation arm check.
 6. Before acknowledging that check, the service worker records browser-session-only replay authorization.
-7. The content script marks that exact generation as starting its native UI replay, and the service worker persists the generation-scoped handshake.
-8. Only then does the content script replay the normal ChatGPT UI action once.
+7. Once controls are ready, the content script marks that exact generation as starting its native UI replay, and the service worker persists the generation-scoped handshake. Both authorization replies recheck the current operation after the storage acknowledgement. Authorization must complete within a separate ten-second arm deadline.
+8. After a valid replay acknowledgement, a fixed sixty-second capture window starts. The content script waits at most 1.5 seconds across its pre-replay and post-acknowledgement readiness checks. Temporary missing or disabled controls and an unknown model may recover within that bound; explicit draft, composer, model, mode, or route changes cancel. Only a fresh visible enabled Send control may be clicked; Stop controls and blind form submission are excluded. The reply carries its absolute deadline, checked immediately before the single native click. The readiness window cannot extend that deadline, and asynchronous cleanup for a retired generation cannot overwrite a newer operation.
 9. Every unrelated paused request is continued immediately.
 10. The only qualifying request is a fresh `POST` from the exact `https://chatgpt.com` origin whose parsed pathname is exactly:
    - `/backend-api/f/conversation`
 11. `/backend-api/f/conversation/prepare`, a trailing-slash route, and all other routes are unrelated.
-12. Exactly one qualifying pause must occur within 10 seconds.
+12. Exactly one qualifying pause must occur before that sixty-second capture deadline. Setup/storage latency does not consume this request budget. Repeated replay markers and unrelated events cannot extend it, and stale arm callbacks cannot cancel it. A qualifying request arriving after the deadline is aborted even if the timeout callback was delayed.
 13. The fresh body must:
     - be valid JSON
     - have `model === "gpt-5-6-pro"` or `model === "gpt-6-pro"`
@@ -168,6 +168,8 @@ Fetch.enable({ patterns: [] })
 That debugger/request operation is one-shot for one fresh composer submission. After it ends, the conversation's Extended mode remains selected. A later captured composer submission in the same chat creates a new generation and freshly repeats the arm, confirmation, replay, mutation, continuation, and cleanup lifecycle.
 
 A controlled live request check on September 7, 2026 used a CDP harness to reproduce the extension's two-field Extended rewrite. The installed extension UI was not live tested. The check observed GPT-6 Pro as `6 Pro`, with `model: "gpt-6-pro"`, `thinking_effort: "standard"`, and `client_prepare_state: "success"` on the untouched request. The reproduced rewrite returned HTTP 200, a completed response, and server response metadata identifying `gpt-6-pro` with `thinking_effort: "extended"`. The untouched comparison reported `thinking_effort: "standard"`. This verifies acceptance of the setting for those requests; it does not measure internal compute or response quality.
+
+On October 5, 2026, the installed 1.0.20 extension's native Send-button and multiline Enter paths were tested in separate fresh chats, with debugger-based inspection kept out of the sends. After completion, the normal backend conversation GET returned HTTP 200 and each final assistant message recorded `status: "finished_successfully"`, `model_slug: "gpt-6-pro"`, and `thinking_effort: "extended"`. This verifies the tested installed UI paths and server metadata separately from the isolated replay regressions.
 
 Changing the current conversation back to Standard is the normal way to end its Extended mode. Request success, warning, failure, timeout, cleanup state, or uncertainty does not reset or consume the saved mode.
 

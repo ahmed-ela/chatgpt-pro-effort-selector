@@ -151,6 +151,20 @@ The archive is written to `dist/` with `manifest.json` at its root.
 - Shadow DOM isolates the selector's internal styling, but not model detection, mount-point discovery, or request schemas.
 - The extension intentionally blocks Extended or reports an uncertain outcome when required structure no longer matches.
 
+### Capture timing fix (1.0.19)
+
+The previous ten-second request timer also covered the authorization round trips. A delayed storage acknowledgement could return success after that timer, navigation, or detachment had already invalidated the monitor. Version 1.0.19 rechecks authorization after persistence and again against an absolute deadline before the native click. It keeps a ten-second authorization deadline and starts a separate, fixed sixty-second request-capture window only after a valid replay acknowledgement. Old timer callbacks cannot cancel the new window, and repeated messages cannot extend it.
+
+These races were reproduced with isolated worker/content-script tests, without a live Pro request. The reported timeout alone does not prove which delay or blocked native action caused a particular historical warning. A genuine expired or unverified send still produces a warning and is never retried automatically.
+
+### Composer replay fix (1.0.20)
+
+An Extended send waits for the worker to arm before it replays ChatGPT's normal Send action. ChatGPT can temporarily replace or disable its composer controls during those round trips. The replay now captures the draft at the original send intent and allows a bounded 1.5-second readiness window, while retaining the worker's absolute authorization deadline. It resolves a fresh, visible, enabled Send control and cancels if the draft, composer, model, conversation, or effort changes. It never blindly clicks a captured button, submits a form without a valid Send control, or retries after clicking.
+
+Local regressions exercise the actual content-script paths. Live verification and any backend metadata evidence are recorded separately from those fixtures. After changing an unpacked extension's files, reload that extension in Chrome and refresh only a safe, idle ChatGPT tab; the version displayed in extension details alone does not prove all running code is current.
+
+On October 5, 2026, the installed 1.0.20 extension was tested through native Send-button and multiline Enter submissions in separate fresh Pro chats. Both completed assistant responses recorded `model_slug: "gpt-6-pro"` and `thinking_effort: "extended"` in the normal backend conversation response. Before activation, 1.0.19 immediately reported an expired authorization; reloading its unchanged source and refreshing the isolated chat allowed the same draft to send Extended. That strongly supports stale worker/content activation, although the initial acknowledgment was not captured. Missing or invalid deadlines now receive specific monitor-acknowledgment wording instead of claiming that a measured timeout expired.
+
 ## For curious readers
 
 <details>

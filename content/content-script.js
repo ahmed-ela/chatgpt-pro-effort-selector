@@ -168,6 +168,7 @@
 
   let scanScheduled = false;
   let submissionBusy = false;
+  let submissionSerial = 0;
   let replayDepth = 0;
   let currentGenerationId = null;
   let toastTimer = null;
@@ -3384,9 +3385,10 @@
     );
   }
 
-  function isSendButton(button) {
+  function isSendButton(button, requireSendSemantics = false) {
     if (
       !(button instanceof Element) ||
+      !button.isConnected ||
       !isVisible(button) ||
       button.closest(
         `[${ROOT_ATTRIBUTE}]`
@@ -3396,6 +3398,8 @@
     }
 
     if (
+      button.getAttribute("aria-disabled") === "true" ||
+      button.matches(":disabled") ||
       button instanceof HTMLButtonElement &&
       button.disabled
     ) {
@@ -3418,22 +3422,28 @@
       button.getAttribute("aria-label"),
       button.getAttribute("title"),
       button.getAttribute("data-testid"),
-      button.getAttribute("name")
+      button.getAttribute("name"),
+      getVisibleControlText(button)
     ]
       .map(normalizeText)
       .join(" ");
+
+    if (/\b(stop|pause|cancel|abort)\b/i.test(semantics)) {
+      return false;
+    }
 
     if (/\b(send|submit)\b/i.test(semantics)) {
       return true;
     }
 
     return (
+      !requireSendSemantics &&
       button instanceof HTMLButtonElement &&
       button.type === "submit"
     );
   }
 
-  function findSendButton() {
+  function findSendButton(requireSendSemantics = false) {
     const editable = findComposerEditable();
 
     if (!editable) {
@@ -3444,7 +3454,7 @@
       for (const candidate of scope.querySelectorAll(
         BUTTON_SELECTOR
       )) {
-        if (isSendButton(candidate)) {
+        if (isSendButton(candidate, requireSendSemantics)) {
           return candidate;
         }
       }
@@ -3503,74 +3513,197 @@
     form = null,
     submitter = null
   ) {
-    return {
+    const editable = findComposerEditable();
+    const inspection = inspectCurrentModel();
+
+    // This snapshot is held only for this captured action, never persisted or
+    // sent to the worker. An asynchronous arm must not send a later draft.
+    return Object.freeze({
       kind,
       button,
       form,
-      submitter
+      submitter,
+      intent: Object.freeze({
+        editable,
+        draft: readReplayDraft(editable),
+        route: parseChatRoute(window.location.href),
+        composerIdentity: replayComposerIdentity(editable),
+        modelLabel: inspection.state === "pro"
+          ? getVisibleControlText(inspection.control)
+          : null
+      })
+    });
+  }
+
+  function readReplayDraft(editable) {
+    if (!(editable instanceof Element)) return null;
+    return editable.matches("textarea")
+      ? editable.value
+      : typeof editable.innerText === "string"
+        ? editable.innerText
+        : editable.textContent;
+  }
+
+  function replayComposerIdentity(editable) {
+    if (!(editable instanceof Element)) return null;
+    if (editable.id === "prompt-textarea") return "prompt-textarea";
+    if (editable.getAttribute("data-testid") === "prompt-textarea") return "prompt-textarea-testid";
+    if (editable.hasAttribute("data-composer-markdown") && editable.closest("[data-composer-input]")) {
+      return "composer-markdown";
+    }
+    return null;
+  }
+
+  function inspectReplayReadiness(
+    descriptor,
+    requirePro,
+    operation = null,
+    replayDeadlineAt = null
+  ) {
+    if (requirePro && replayDeadlineAt !== null && (
+      !Number.isSafeInteger(replayDeadlineAt) || Date.now() >= replayDeadlineAt
+    )) return { ok: false, reason: "authorization_expired" };
+
+    if (operation && !operationRouteIsCurrent(operation.epoch, operation.route)) {
+      return { ok: false, reason: "route_changed" };
+    }
+    if (operation && preference !== operation.mode) {
+      return { ok: false, reason: "mode_changed" };
+    }
+    if (operation && !replayOperationIsCurrent(operation)) {
+      return { ok: false, reason: "operation_finished" };
+    }
+    if (!operation && descriptor.intent && !sameRouteLocation(
+      parseChatRoute(window.location.href), descriptor.intent.route
+    )) return { ok: false, reason: "route_changed" };
+
+    const intent = descriptor.intent;
+    if (!intent || intent.draft === null || !intent.editable) {
+      return { ok: false, reason: "composer_changed" };
+    }
+    const editable = findComposerEditable();
+    if (!editable) return { ok: false, reason: "composer_unavailable", transient: true };
+    if (editable !== intent.editable && (
+      (intent.editable.isConnected && isVisible(intent.editable)) ||
+      !intent.composerIdentity || replayComposerIdentity(editable) !== intent.composerIdentity
+    )) return { ok: false, reason: "composer_changed" };
+    if (readReplayDraft(editable) !== intent.draft) {
+      return { ok: false, reason: "draft_changed" };
+    }
+
+    if (requirePro) {
+      const inspection = inspectCurrentModel();
+      if (inspection.state === "other") return { ok: false, reason: "model_changed" };
+      if (inspection.state !== "pro") return { ok: false, reason: "model_unavailable", transient: true };
+      if (!intent.modelLabel || getVisibleControlText(inspection.control) !== intent.modelLabel) {
+        return { ok: false, reason: "model_changed" };
+      }
+    }
+
+    const button = findSendButton(true);
+    if (!button || !isSendButton(button, true)) {
+      return { ok: false, reason: "send_unavailable", transient: true };
+    }
+    return { ok: true, button, editable };
+  }
+
+  function replayOperationIsCurrent(operation) {
+    return submissionBusy && submissionSerial === operation.serial &&
+      currentGenerationId === operation.generationId;
+  }
+
+  async function waitForReplayReadiness(
+    descriptor,
+    operation,
+    budget,
+    replayDeadlineAt = null
+  ) {
+    // Share actual UI-wait time across both acknowledgment boundaries. Worker
+    // messaging latency has its own absolute deadline and does not spend this
+    // readiness budget. A throttled wake-up cannot grant a late native action.
+    const deadlineAt = Date.now() + budget.remainingMs;
+    let lastReason = "ui_readiness_timeout";
+    try {
+      while (true) {
+        if (Date.now() >= deadlineAt) return { ok: false, reason: lastReason };
+        const readiness = inspectReplayReadiness(descriptor, true, operation, replayDeadlineAt);
+        if (readiness.ok || !readiness.transient) return readiness;
+        lastReason = readiness.reason;
+        await new Promise(resolve => window.setTimeout(resolve, Math.min(25, deadlineAt - Date.now())));
+      }
+    } finally {
+      budget.remainingMs = Math.max(0, deadlineAt - Date.now());
+    }
+  }
+
+  function replayBlockedMessage(reason) {
+    const reasons = {
+      authorization_expired: "The Extended send authorization expired before the UI action could run.",
+      authorization_invalid: "The request monitor did not return a valid send deadline. Reload the extension and refresh this chat after preserving your draft.",
+      ui_readiness_timeout: "ChatGPT's send controls did not settle within the UI readiness window.",
+      route_changed: "The chat changed while Extended was being armed.",
+      mode_changed: "The selected effort changed while Extended was being armed.",
+      operation_finished: "The one-shot operation ended before the UI action could run.",
+      composer_changed: "The message input changed while Extended was being armed.",
+      composer_unavailable: "ChatGPT's message input did not become ready after arming.",
+      draft_changed: "The draft changed while Extended was being armed.",
+      model_changed: "The visible Pro model changed while Extended was being armed.",
+      model_unavailable: "The visible Pro model could not be confirmed after arming.",
+      send_unavailable: "ChatGPT's Send button did not become ready after arming."
     };
+    return `${reasons[reason] ?? "ChatGPT's send controls changed after arming."} The action was not replayed.`;
+  }
+
+  async function cancelBlockedReplay(operation, reason) {
+    const generationId = operation.generationId;
+    try {
+      await runtimeSend({ type: "cancelArm", generationId });
+    } catch {
+      // Background cleanup or timeout remains conservative.
+    }
+    // A canceled generation's late acknowledgment must not clear or overwrite
+    // a newer arm, including while the newer arm is still awaiting its ID.
+    if (submissionSerial !== operation.serial || currentGenerationId !== generationId) return;
+    submissionBusy = false;
+    clearDraftAdoption(generationId);
+    const message = replayBlockedMessage(reason);
+    setViewState({ kind: "error", label: "Extended blocked", message });
+    showToast(message, false);
   }
 
   function replayNormalUiAction(
     descriptor,
-    requirePro = true
+    requirePro = true,
+    replayDeadlineAt = null,
+    operation = null,
+    onBlocked = null
   ) {
-    if (requirePro) {
-      const inspection =
-        inspectCurrentModel();
+    const withinDeadline = () => !requirePro || (
+      Number.isSafeInteger(replayDeadlineAt) && Date.now() < replayDeadlineAt
+    );
 
-      if (inspection.state !== "pro") {
-        return false;
-      }
+    if (!withinDeadline()) {
+      onBlocked?.(Number.isSafeInteger(replayDeadlineAt) ? "authorization_expired" : "authorization_invalid");
+      return false;
+    }
+
+    const readiness = inspectReplayReadiness(descriptor, requirePro, operation, replayDeadlineAt);
+    if (!readiness.ok) {
+      onBlocked?.(readiness.reason);
+      return false;
     }
 
     replayDepth += 1;
 
     try {
-      if (
-        descriptor.button instanceof HTMLElement &&
-        descriptor.button.isConnected &&
-        !descriptor.button.matches(":disabled")
-      ) {
-        descriptor.button.click();
-        return true;
+      if (!withinDeadline()) {
+        onBlocked?.("authorization_expired");
+        return false;
       }
-
-      const currentSendButton =
-        findSendButton();
-
-      if (currentSendButton) {
-        currentSendButton.click();
-        return true;
-      }
-
-      const form =
-        descriptor.form?.isConnected
-          ? descriptor.form
-          : getComposerForm();
-
-      if (
-        form instanceof HTMLFormElement &&
-        typeof form.requestSubmit ===
-          "function"
-      ) {
-        if (
-          descriptor.submitter instanceof
-            HTMLButtonElement &&
-          descriptor.submitter.isConnected &&
-          descriptor.submitter.form === form
-        ) {
-          form.requestSubmit(
-            descriptor.submitter
-          );
-        } else {
-          form.requestSubmit();
-        }
-
-        return true;
-      }
-
-      return false;
+      // Never replay the captured node blindly: React can reuse Send as Stop.
+      // A form call without a valid Send control also cannot prove submission.
+      readiness.button.click();
+      return true;
     } finally {
       replayDepth -= 1;
     }
@@ -3596,8 +3729,14 @@
   }
 
   async function invalidateArmedOperation(
-    generationId
+    operation
   ) {
+    const generationId = operation.generationId;
+    const invalidationIsCurrent = () => submissionSerial === operation.serial && (
+      currentGenerationId === generationId || currentGenerationId === null
+    );
+    if (!invalidationIsCurrent()) return;
+
     const currentRoute =
       parseChatRoute(
         window.location.href
@@ -3611,6 +3750,8 @@
     ) {
       await loadRouteMode(currentRoute);
     }
+
+    if (!invalidationIsCurrent()) return;
 
     rememberRetiredGeneration(
       generationId
@@ -3627,6 +3768,8 @@
       // The tab remains blocked until conservative status cleanup arrives.
     }
 
+    if (!invalidationIsCurrent()) return;
+
     await loadRouteMode(
       parseChatRoute(
         window.location.href
@@ -3642,6 +3785,7 @@
 
     const operationEpoch = routeEpoch;
     const operationRoute = activeRoute;
+    const operationSerial = ++submissionSerial;
 
     if (
       operationRoute.kind === "draft" &&
@@ -3680,6 +3824,8 @@
       };
     }
 
+    if (submissionSerial !== operationSerial) return;
+
     if (!armResponse?.ok) {
       submissionBusy = false;
       navigationInvalidatedOperation =
@@ -3715,8 +3861,19 @@
       return;
     }
 
+    if (!submissionBusy) return;
+
     currentGenerationId =
       armResponse.generationId;
+
+    const operation = Object.freeze({
+      epoch: operationEpoch,
+      route: operationRoute,
+      mode: EXTENDED,
+      generationId: armResponse.generationId,
+      serial: operationSerial
+    });
+    if (!replayOperationIsCurrent(operation)) return;
 
     if (draftAdoption) {
       draftAdoption.generationId =
@@ -3730,7 +3887,7 @@
       )
     ) {
       await invalidateArmedOperation(
-        currentGenerationId
+        operation
       );
       return;
     }
@@ -3740,8 +3897,7 @@
     try {
       confirmation = await runtimeSend({
         type: "confirmArmed",
-        generationId:
-          currentGenerationId
+        generationId: operation.generationId
       });
     } catch {
       confirmation = {
@@ -3751,6 +3907,8 @@
       };
     }
 
+    if (!replayOperationIsCurrent(operation)) return;
+
     if (
       !operationRouteIsCurrent(
         operationEpoch,
@@ -3758,7 +3916,7 @@
       )
     ) {
       await invalidateArmedOperation(
-        currentGenerationId
+        operation
       );
       return;
     }
@@ -3767,13 +3925,13 @@
       try {
         await runtimeSend({
           type: "cancelArm",
-          generationId:
-            currentGenerationId
+          generationId: operation.generationId
         });
       } catch {
         // Background cleanup or timeout remains conservative.
       }
 
+      if (submissionSerial !== operation.serial || currentGenerationId !== operation.generationId) return;
       submissionBusy = false;
       clearDraftAdoption(
         currentGenerationId
@@ -3793,13 +3951,23 @@
       return;
     }
 
+    const readinessBudget = { remainingMs: 1500 };
+    const readiness = await waitForReplayReadiness(descriptor, operation, readinessBudget);
+    if (!readiness.ok) {
+      if (readiness.reason === "route_changed") {
+        await invalidateArmedOperation(operation);
+      } else {
+        await cancelBlockedReplay(operation, readiness.reason);
+      }
+      return;
+    }
+
     let replayStart;
 
     try {
       replayStart = await runtimeSend({
         type: "markReplayStarting",
-        generationId:
-          currentGenerationId
+        generationId: operation.generationId
       });
     } catch {
       replayStart = {
@@ -3809,6 +3977,8 @@
       };
     }
 
+    if (!replayOperationIsCurrent(operation)) return;
+
     if (
       !operationRouteIsCurrent(
         operationEpoch,
@@ -3816,22 +3986,31 @@
       )
     ) {
       await invalidateArmedOperation(
-        currentGenerationId
+        operation
       );
       return;
+    }
+
+    if (replayStart?.ok && !Number.isSafeInteger(replayStart.replayDeadlineAt)) {
+      replayStart = { ok: false, message: replayBlockedMessage("authorization_invalid") };
+    } else if (replayStart?.ok && Date.now() >= replayStart.replayDeadlineAt) {
+      replayStart = {
+        ok: false,
+        message: "The Extended send authorization expired before the UI action could run. The action was not replayed."
+      };
     }
 
     if (!replayStart?.ok) {
       try {
         await runtimeSend({
           type: "cancelArm",
-          generationId:
-            currentGenerationId
+          generationId: operation.generationId
         });
       } catch {
         // Background cleanup or timeout remains conservative.
       }
 
+      if (submissionSerial !== operation.serial || currentGenerationId !== operation.generationId) return;
       submissionBusy = false;
       clearDraftAdoption(
         currentGenerationId
@@ -3851,6 +4030,21 @@
       return;
     }
 
+    const finalReadiness = await waitForReplayReadiness(
+      descriptor,
+      operation,
+      readinessBudget,
+      replayStart.replayDeadlineAt
+    );
+    if (!finalReadiness.ok) {
+      if (finalReadiness.reason === "route_changed") {
+        await invalidateArmedOperation(operation);
+      } else {
+        await cancelBlockedReplay(operation, finalReadiness.reason);
+      }
+      return;
+    }
+
     if (
       draftAdoption &&
       routeBelongsToDraftAdoption(
@@ -3864,42 +4058,24 @@
       );
     }
 
-    const replayed =
-      replayNormalUiAction(descriptor);
+    let replayBlockReason = null;
+    const replayed = replayNormalUiAction(
+      descriptor,
+      true,
+      replayStart.replayDeadlineAt,
+      operation,
+      reason => { replayBlockReason = reason; }
+    );
 
     if (replayed) {
       /*
-       * The background service worker owns the 10-second deadline. The busy
+       * The background service worker owns the bounded capture deadline. The busy
        * state is released by a sent, warning, uncertain, or failed status.
        */
       return;
     }
 
-    try {
-      await runtimeSend({
-        type: "cancelArm",
-        generationId:
-          currentGenerationId
-      });
-    } catch {
-      // Background timeout remains fail-closed.
-    }
-
-    submissionBusy = false;
-    clearDraftAdoption(
-      currentGenerationId
-    );
-
-    const message =
-      "ChatGPT's normal submission action could not be replayed after arming.";
-
-    setViewState({
-      kind: "error",
-      label: "Extended blocked",
-      message
-    });
-
-    showToast(message, false);
+    await cancelBlockedReplay(operation, replayBlockReason);
   }
 
   async function resumeCapturedSubmission(

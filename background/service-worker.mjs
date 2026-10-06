@@ -21,7 +21,8 @@ import {
 
 const MESSAGE_SOURCE = "chatgpt-pro-effort-selector";
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
-const CAPTURE_TIMEOUT_MS = 10_000;
+const ARM_TIMEOUT_MS = 10_000;
+const CAPTURE_TIMEOUT_MS = 60_000;
 const DUPLICATE_SETTLE_MS = 75;
 const CLEANUP_RETRY_MS = 750;
 const MAX_CLEANUP_ATTEMPTS = 3;
@@ -552,6 +553,7 @@ function clearSessionTimers(session) {
   clearTimer(session.navigationTimer);
 
   session.captureTimer = null;
+  session.captureToken = null;
   session.settleTimer = null;
   session.cleanupTimer = null;
   session.navigationTimer = null;
@@ -592,8 +594,10 @@ function statusMessageFor(code, status, diagnostic = null) {
       "The one-shot arm was no longer current, so the original UI submission was not replayed.",
     replay_cancelled:
       "ChatGPT's original UI submission could not be replayed after arming, so the debugger gate was cancelled.",
+    arm_timeout:
+      "The Extended send authorization did not finish before its deadline. The one-shot operation was cancelled.",
     timeout:
-      "No qualifying Pro conversation request appeared within 10 seconds. The one-shot operation was cancelled.",
+      "No qualifying Pro conversation request appeared before the capture deadline. The one-shot operation was cancelled.",
     malformed_event:
       "The paused CDP event was malformed, so the operation was blocked.",
     malformed_request:
@@ -809,6 +813,9 @@ function createSession(sender, parsedUrl) {
     qualifyingRequestIds: new Set(),
     candidateEvent: null,
     captureTimer: null,
+    captureToken: null,
+    captureDeadlineAt: 0,
+    captureTimeoutCode: "arm_timeout",
     settleTimer: null,
     cleanupTimer: null,
     cleanupAttempts: 0,
@@ -1451,6 +1458,35 @@ async function retrySentCleanup(session) {
   }
 }
 
+function isLiveArmedSession(session) {
+  return session && activeSessions.get(session.tabId) === session &&
+    session.phase === "armed" && session.attached &&
+    !session.detached && !session.finalizing;
+}
+
+function armIsCurrent(session) {
+  if (!isLiveArmedSession(session)) return false;
+  if (Date.now() < session.captureDeadlineAt) return true;
+  // Timers may be delayed. Never return an authorization just because the
+  // timeout callback has not run yet. Finalization revokes the arm synchronously.
+  void finalizeFailedSession(session, session.captureTimeoutCode);
+  return false;
+}
+
+function startCaptureDeadline(session, milliseconds, code) {
+  clearTimer(session.captureTimer);
+  const token = Symbol("capture-deadline");
+  session.captureToken = token;
+  session.captureDeadlineAt = Date.now() + milliseconds;
+  session.captureTimeoutCode = code;
+  session.captureTimer = setTimeout(() => {
+    // clearTimeout cannot withdraw an already queued callback. An old arm
+    // deadline must not cancel the newer request-capture window or a candidate.
+    if (session.captureToken !== token || !isLiveArmedSession(session)) return;
+    void finalizeFailedSession(session, code);
+  }, milliseconds);
+}
+
 async function armExtended(sender) {
   const parsedUrl =
     parseCurrentSenderTabUrl(sender);
@@ -1644,12 +1680,7 @@ async function armExtended(sender) {
     };
   }
 
-  session.captureTimer = setTimeout(() => {
-    void finalizeFailedSession(
-      session,
-      "timeout"
-    );
-  }, CAPTURE_TIMEOUT_MS);
+  startCaptureDeadline(session, ARM_TIMEOUT_MS, "arm_timeout");
 
   return {
     ok: true,
@@ -1665,7 +1696,7 @@ async function confirmArmed(sender, message) {
       : null;
 
   if (
-    !session ||
+    !armIsCurrent(session) ||
     !senderMatchesSession(sender, session) ||
     session.generationId !== message.generationId ||
     session.phase !== "armed" ||
@@ -1715,6 +1746,10 @@ async function confirmArmed(sender, message) {
     };
   }
 
+  if (!armIsCurrent(session)) {
+    return { ok: false, code: "arm_not_current", message: statusMessageFor("arm_not_current", "failed") };
+  }
+
   return {
     ok: true,
     generationId: session.generationId
@@ -1732,7 +1767,7 @@ async function markReplayStarting(
       : null;
 
   if (
-    !session ||
+    !armIsCurrent(session) ||
     !senderMatchesSession(sender, session) ||
     session.generationId !==
       message.generationId ||
@@ -1771,10 +1806,19 @@ async function markReplayStarting(
     };
   }
 
+  if (!armIsCurrent(session)) {
+    return { ok: false, code: "replay_not_current", message: statusMessageFor("arm_not_current", "failed") };
+  }
+
+  // Storage/authorization latency must not consume the native request's budget.
+  // This window starts once and is never extended by later requests or messages.
+  startCaptureDeadline(session, CAPTURE_TIMEOUT_MS, "timeout");
+
   return {
     ok: true,
     generationId:
-      session.generationId
+      session.generationId,
+    replayDeadlineAt: session.captureDeadlineAt
   };
 }
 
@@ -2077,6 +2121,7 @@ async function acceptFirstCandidate(
 
   clearTimer(session.captureTimer);
   session.captureTimer = null;
+  session.captureToken = null;
 
   recordActiveSession(session);
 
@@ -2145,6 +2190,11 @@ async function handleDebuggerEvent(
       session,
       parameters.requestId
     );
+    return;
+  }
+
+  if (isLiveArmedSession(session) && Date.now() >= session.captureDeadlineAt) {
+    await finalizeFailedSession(session, session.captureTimeoutCode, parameters.requestId);
     return;
   }
 
