@@ -157,6 +157,10 @@ The previous ten-second request timer also covered the authorization round trips
 
 These races were reproduced with isolated worker/content-script tests, without a live Pro request. The reported timeout alone does not prove which delay or blocked native action caused a particular historical warning. A genuine expired or unverified send still produces a warning and is never retried automatically.
 
+### Long draft selector fix (1.0.21)
+
+The effort selector stays beside Pro when a long pasted draft expands inside the composer's scrolling text area. Model detection measures the visible portion of the editor, so scrolling hidden text does not make the nearby Pro control appear far away.
+
 ### Composer replay fix (1.0.20)
 
 An Extended send waits for the worker to arm before it replays ChatGPT's normal Send action. ChatGPT can temporarily replace or disable its composer controls during those round trips. The replay now captures the draft at the original send intent and allows a bounded 1.5-second readiness window, while retaining the worker's absolute authorization deadline. It resolves a fresh, visible, enabled Send control and cancels if the draft, composer, model, conversation, or effort changes. It never blindly clicks a captured button, submits a form without a valid Send control, or retries after clicking.

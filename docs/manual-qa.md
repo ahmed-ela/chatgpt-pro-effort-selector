@@ -16,6 +16,16 @@ Use a unique marker in every test prompt. When checking backend metadata, keep D
 
 For GPT-6 Pro, confirm the fresh request uses `model: "gpt-6-pro"` and the continued request preserves that model while setting `thinking_effort: "extended"` and `client_prepare_state: "none"`. Confirm the completed conversation's backend metadata before treating request continuation as proof that the server honored Extended.
 
+## Long pasted drafts
+
+1. Open a fresh Pro chat and confirm the effort selector is visible.
+2. Paste a multiline draft long enough to make the composer scroll (for example, 35 paragraphs totaling about 3,000 characters).
+3. Confirm exactly one effort selector stays beside Pro while scrolling the draft to its beginning, middle, and end.
+4. Open the picker and switch Standard to Extended and back without submitting the draft.
+5. Paste a larger draft that ChatGPT converts to a text attachment, then choose **Show in text field**. Confirm the selector remains visible after the inline editor expands.
+6. Clear the draft and confirm the selector remains visible.
+7. Select a non-Pro model and confirm the selector disappears; return to Pro and confirm it returns once.
+
 ## Native visual behavior
 
 1. Test in light mode.
