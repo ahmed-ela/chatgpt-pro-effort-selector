@@ -396,6 +396,45 @@
     return scopes;
   }
 
+  function getVisibleEditableRect(editable) {
+    const { left, right, top, bottom } =
+      editable.getBoundingClientRect();
+    const visible = { left, right, top, bottom };
+
+    // Long drafts extend beyond their scrolling container. Measure proximity
+    // from the portion of the editor that the user can actually see.
+    for (
+      let parent = editable.parentElement;
+      parent;
+      parent = parent.parentElement
+    ) {
+      const style = getComputedStyle(parent);
+      const clipsX = /^(auto|scroll|hidden|clip|overlay)$/.test(style.overflowX);
+      const clipsY = /^(auto|scroll|hidden|clip|overlay)$/.test(style.overflowY);
+
+      if (style.display === "contents" || (!clipsX && !clipsY)) {
+        continue;
+      }
+
+      const bounds = parent.getBoundingClientRect();
+
+      if (clipsX) {
+        visible.left = Math.max(visible.left, bounds.left);
+        visible.right = Math.min(visible.right, bounds.right);
+      }
+      if (clipsY) {
+        visible.top = Math.max(visible.top, bounds.top);
+        visible.bottom = Math.min(visible.bottom, bounds.bottom);
+      }
+
+      if (visible.right <= visible.left || visible.bottom <= visible.top) {
+        return null;
+      }
+    }
+
+    return visible;
+  }
+
   function scoreModelControl(candidate, editable) {
     if (
       !isVisible(candidate) ||
@@ -448,7 +487,11 @@
     const candidateRect =
       candidate.getBoundingClientRect();
     const editableRect =
-      editable.getBoundingClientRect();
+      getVisibleEditableRect(editable);
+
+    if (!editableRect) {
+      return Number.NEGATIVE_INFINITY;
+    }
 
     const horizontalDistance = Math.min(
       Math.abs(
