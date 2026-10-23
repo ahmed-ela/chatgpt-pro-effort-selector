@@ -314,6 +314,43 @@
   }
 
   function getVisibleControlText(element) {
+    const excluded = (node) => {
+      const style = getComputedStyle(node);
+      return node.hasAttribute("hidden") ||
+        node.hasAttribute("inert") ||
+        node.getAttribute("aria-hidden") === "true" ||
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse" ||
+        Number.parseFloat(style.opacity) === 0;
+    };
+
+    for (let node = element; node; node = node.parentElement) {
+      if (excluded(node)) return "";
+    }
+
+    const hidden = new Set(
+      Array.from(element.querySelectorAll("*")).filter(excluded)
+    );
+    if (hidden.size > 0) {
+      // innerText includes transparent/aria-hidden placeholders in the native
+      // model picker. Read the remaining label without mutating that control.
+      const read = (node) => {
+        if (node.nodeType === 3) return node.nodeValue || "";
+        if (!(node instanceof Element) || hidden.has(node)) return "";
+        if (node.localName === "br") return "\n";
+        const text = Array.from(node.childNodes, read).join("");
+        const display = getComputedStyle(node).display;
+        return display === "contents" || display.startsWith("inline")
+          ? text
+          : ` ${text} `;
+      };
+      // Do not let an aria-label resurrect a wholly hidden model label.
+      return normalizeText(read(element));
+    }
+
+    // Preserve browser-rendered spacing and icon-only accessible labels for
+    // existing controls when there is no hidden text to remove.
     const visibleText = normalizeText(
       element.innerText
     );

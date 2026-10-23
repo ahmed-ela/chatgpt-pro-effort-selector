@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-pro-effort-selector",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "private": true,
   "type": "module",
   "description": "Dependency-free validation for the ChatGPT Pro Effort Selector Manifest V3 extension.",

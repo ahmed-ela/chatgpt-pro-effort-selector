@@ -22,14 +22,21 @@ function fixture() {
       this.attributes = attributes;
       this.style = { display: "block", visibility: "visible", opacity: "1", overflowX: "visible", overflowY: "visible", ...style };
       this.children = [];
+      this.childNodes = [];
       this.parentElement = null;
       this.innerText = "";
+      this.nodeType = 1;
+      this.localName = tag;
     }
-    append(child) { child.parentElement = this; this.children.push(child); return child; }
+    set innerText(value) { this.renderedText = value; this.childNodes = [{ nodeType: 3, nodeValue: value }]; }
+    get innerText() { return this.renderedText; }
+    append(child) { child.parentElement = this; this.children.push(child); this.childNodes.push(child); return child; }
     getBoundingClientRect() { return this.bounds; }
     getAttribute(name) { return this.attributes[name] ?? null; }
+    hasAttribute(name) { return name in this.attributes; }
     matches(selector) {
       return selector.split(",").some(part => {
+        if (part === "*") return true;
         const attributes = [...part.matchAll(/\[([^=\]]+)(?:="([^"]*)")?\]/g)];
         return attributes.length
           ? attributes.every(([, name, value]) => name in this.attributes && (value === undefined || this.attributes[name] === value))
@@ -130,4 +137,77 @@ test("keeps exact model-label gating after a long paste", () => {
     assert.equal(f.sandbox.findComposerModelControl(), null, label);
     assert.equal(f.sandbox.inspectCurrentModel().state, "other", label);
   }
+});
+
+function nativeModelLabel(f, label, attributes = { "aria-hidden": "true" }, style = { opacity: "0" }) {
+  f.model.attributes["aria-label"] = "Select ChatGPT model";
+  f.model.innerText = `Thinking effort\n${label}`;
+  f.model.childNodes = [];
+  const placeholder = f.model.append(new f.Element("span", rect(120, 413, 200, 441), attributes, { display: "inline", ...style }));
+  placeholder.innerText = "Thinking effort";
+  const visible = f.model.append(new f.Element("span", rect(120, 413, 200, 441), { "aria-hidden": "false" }, { display: "inline" }));
+  visible.innerText = label;
+  return { placeholder, visible };
+}
+
+test("recognizes the native Pro picker with its transparent Thinking effort placeholder", () => {
+  const f = fixture();
+  nativeModelLabel(f, "Pro");
+  assert.equal(f.sandbox.getVisibleControlText(f.model), "Pro");
+  assert.equal(f.sandbox.findComposerModelControl(), f.model);
+  assert.equal(f.sandbox.inspectCurrentModel().state, "pro");
+});
+
+for (const [name, attributes, style] of [
+  ["aria-hidden", { "aria-hidden": "true" }, {}],
+  ["hidden", { hidden: "" }, {}],
+  ["inert", { inert: "" }, {}],
+  ["display none", {}, { display: "none" }],
+  ["visibility hidden", {}, { visibility: "hidden" }],
+  ["visibility collapse", {}, { visibility: "collapse" }],
+  ["zero opacity", {}, { opacity: "0.0" }],
+]) {
+  test(`ignores an entire ${name} placeholder subtree`, () => {
+    const f = fixture();
+    const { placeholder } = nativeModelLabel(f, "Pro", attributes, style);
+    placeholder.innerText = "";
+    const nested = placeholder.append(new f.Element("span", rect(0, 0, 0, 0), {}, { display: "contents" }));
+    nested.innerText = "Thinking effort";
+    assert.equal(f.sandbox.findComposerModelControl(), f.model);
+  });
+}
+
+test("does not mistake hidden Pro text or visible suffixes for the selected Pro model", () => {
+  const f = fixture();
+  const { placeholder, visible } = nativeModelLabel(f, "Extra High");
+  placeholder.innerText = "Pro";
+  f.model.innerText = "Pro\nExtra High";
+  f.model.childNodes = [placeholder, visible];
+  for (const label of ["Extra High", "GPT-6", "Pro preview", "Pro Extra High"]) {
+    visible.innerText = label;
+    assert.equal(f.sandbox.findComposerModelControl(), null, label);
+    assert.equal(f.sandbox.inspectCurrentModel().state, "other", label);
+  }
+  visible.innerText = "";
+  f.model.attributes["aria-label"] = "Pro";
+  assert.equal(f.sandbox.getVisibleControlText(f.model), "", "no accessible-label fallback for hidden-only Pro");
+  assert.equal(f.sandbox.findComposerModelControl(), null);
+});
+
+test("preserves visible inline fragments, block spacing, and display-contents labels after filtering", () => {
+  const f = fixture();
+  const { visible } = nativeModelLabel(f, "");
+  visible.style.display = "contents";
+  for (const text of ["P", "ro"]) {
+    const span = visible.append(new f.Element("span", rect(0, 0, 0, 0), {}, { display: "inline" }));
+    span.innerText = text;
+  }
+  assert.equal(f.sandbox.findComposerModelControl(), f.model);
+  visible.children = []; visible.childNodes = [];
+  for (const text of ["6", "Pro"]) {
+    const line = visible.append(new f.Element("div", rect(120, 413, 200, 441)));
+    line.innerText = text;
+  }
+  assert.equal(f.sandbox.getVisibleControlText(f.model), "6 Pro");
+  assert.equal(f.sandbox.findComposerModelControl(), f.model);
 });

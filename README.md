@@ -151,6 +151,14 @@ The archive is written to `dist/` with `manifest.json` at its root.
 - Shadow DOM isolates the selector's internal styling, but not model detection, mount-point discovery, or request schemas.
 - The extension intentionally blocks Extended or reports an uncertain outcome when required structure no longer matches.
 
+### Hidden model label fix (1.0.22)
+
+ChatGPT's updated Power control renders a hidden "Thinking effort" placeholder alongside the visible "Pro" label. Reading the entire control's `innerText` included both strings, so the exact Pro detector rejected it and removed the Standard / Extended selector. Version 1.0.22 excludes hidden label subtrees while preserving the exact supported Pro labels. It does not change the selected model or request interception.
+
+The observed control markup is covered by regression tests, including hidden Pro labels and visible non-Pro controls that must remain ineligible. All 183 automated checks pass.
+
+On October 23, 2026, the reloaded 1.0.22 extension displayed both Standard and Extended beside the native Pro control. A fresh chat submitted through Chrome's native Send button with Extended selected returned the requested verification marker once. Its completed assistant message in the normal backend conversation response recorded `status: "finished_successfully"`, `model_slug: "gpt-6-pro"`, and `thinking_effort: "extended"`. Developer tools were opened only after completion, and the test chat was returned to Standard afterward. This confirms Extended was accepted for that request; it does not establish greater compute or quality than native Pro.
+
 ### Capture timing fix (1.0.19)
 
 The previous ten-second request timer also covered the authorization round trips. A delayed storage acknowledgement could return success after that timer, navigation, or detachment had already invalidated the monitor. Version 1.0.19 rechecks authorization after persistence and again against an absolute deadline before the native click. It keeps a ten-second authorization deadline and starts a separate, fixed sixty-second request-capture window only after a valid replay acknowledgement. Old timer callbacks cannot cancel the new window, and repeated messages cannot extend it.

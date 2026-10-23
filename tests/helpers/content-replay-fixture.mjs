@@ -34,6 +34,7 @@ export function fixture({ now = 1_000, deadline = 61_000, source = currentSource
     getAttribute(name) { return this.attributes.get(name) ?? null; }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
     hasAttribute(name) { return this.attributes.has(name); }
+    querySelectorAll() { return []; }
     matches(selector) { return selector === ":disabled" ? this.disabled === true : selector === "textarea" ? this.textarea === true : false; }
     closest(selector) { return selector === "form" || selector === "[data-composer-input]" ? form : null; }
     getBoundingClientRect() { return { left: 0, right: 200, top: 0, bottom: 100, width: 200, height: 100 }; }
@@ -67,6 +68,7 @@ export function fixture({ now = 1_000, deadline = 61_000, source = currentSource
   state.buttons = [button];
   const sandbox = {
     Element, HTMLElement: Element, HTMLButtonElement, HTMLFormElement,
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
     Date: { now: () => state.now }, replayDepth: 0,
     ROOT_ATTRIBUTE: "data-pro-effort-selector-root", BUTTON_SELECTOR: "button,[role=button]",
     EXTENDED: "extended", preference: "extended",
